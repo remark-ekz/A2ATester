@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>A2A Tester</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div>
+            <h1>A2A Tester</h1>
+            <p id="statusText">Starting...</p>
+          </div>
+        </div>
+
+        <label class="field-label" for="profileSelect">Connection</label>
+        <select id="profileSelect"></select>
+        <div class="button-row">
+          <button id="newProfileBtn" class="ghost">New</button>
+          <button id="saveProfileBtn" class="primary">Save</button>
+        </div>
+
+        <label class="field-label" for="paletteSelect">Palette</label>
+        <select id="paletteSelect"></select>
+
+        <button id="newChatBtn" class="primary full">New Chat</button>
+
+        <div class="sidebar-section-title">Chats</div>
+        <div id="chatList" class="chat-list"></div>
+      </aside>
+
+      <main class="main">
+        <section class="settings-stack">
+          <details open>
+            <summary>Connection</summary>
+            <div class="settings-grid">
+              <label>
+                <span>Name</span>
+                <input id="profileName" type="text" />
+              </label>
+              <label class="wide">
+                <span>Host / A2A endpoint</span>
+                <input id="endpoint" type="url" />
+              </label>
+              <label>
+                <span>Protocol</span>
+                <select id="protocolVersion">
+                  <option value="1.0">1.0</option>
+                  <option value="0.3">0.3</option>
+                  <option value="0.2">0.2</option>
+                </select>
+              </label>
+              <label>
+                <span>Timeout seconds</span>
+                <input id="timeoutSeconds" type="number" min="1" step="1" />
+              </label>
+              <button id="agentCardBtn" class="ghost align-end">Load Agent Card</button>
+            </div>
+            <pre id="agentCard" class="json-panel small"></pre>
+          </details>
+
+          <details>
+            <summary>Certificates</summary>
+            <div class="cert-grid">
+              <label class="switch-row">
+                <input id="tlsVerify" type="checkbox" />
+                <span>Verify TLS certificates</span>
+              </label>
+              <div class="file-row">
+                <label>
+                  <span>CA bundle</span>
+                  <input id="caBundlePath" type="text" />
+                </label>
+                <input id="caBundleFile" type="file" />
+              </div>
+              <div class="file-row">
+                <label>
+                  <span>Client certificate</span>
+                  <input id="clientCertPath" type="text" />
+                </label>
+                <input id="clientCertFile" type="file" />
+              </div>
+              <div class="file-row">
+                <label>
+                  <span>Client key</span>
+                  <input id="clientKeyPath" type="text" />
+                </label>
+                <input id="clientKeyFile" type="file" />
+              </div>
+            </div>
+          </details>
+
+          <details>
+            <summary>Headers</summary>
+            <div id="headerCards" class="header-cards"></div>
+            <div class="header-editor">
+              <label>
+                <span>Name</span>
+                <input id="headerName" type="text" placeholder="Authorization" />
+              </label>
+              <label class="wide">
+                <span>Value</span>
+                <input id="headerValue" type="password" placeholder="Bearer ..." />
+              </label>
+              <label class="switch-row">
+                <input id="headerEnabled" type="checkbox" checked />
+                <span>Enabled</span>
+              </label>
+              <label class="switch-row">
+                <input id="headerSecret" type="checkbox" checked />
+                <span>Mask value</span>
+              </label>
+              <div class="button-row align-end">
+                <button id="newHeaderBtn" class="ghost">New Header</button>
+                <button id="deleteHeaderBtn" class="danger">Delete Header</button>
+                <button id="saveHeaderBtn" class="primary">Save Header</button>
+              </div>
+            </div>
+          </details>
+
+          <details>
+            <summary>Metadata</summary>
+            <textarea id="metadataJson" class="code-input" spellcheck="false"></textarea>
+            <button id="formatMetadataBtn" class="ghost">Format JSON</button>
+          </details>
+
+          <details>
+            <summary>Task Tools</summary>
+            <div class="task-tools">
+              <label class="wide">
+                <span>Task ID</span>
+                <input id="taskId" type="text" />
+              </label>
+              <button id="getTaskBtn" class="ghost">Get Task</button>
+              <button id="cancelTaskBtn" class="danger">Cancel Task</button>
+            </div>
+          </details>
+        </section>
+
+        <section class="conversation-meta" id="conversationMeta"></section>
+        <section class="chat-pane" id="chatPane"></section>
+
+        <section class="composer">
+          <textarea id="messageInput" placeholder="Write a message for the agent"></textarea>
+          <div class="composer-actions">
+            <button id="sendBtn" class="primary">Send</button>
+            <button id="streamBtn" class="ghost">Stream</button>
+          </div>
+        </section>
+
+        <details class="diagnostics-details">
+          <summary>JSON diagnostics</summary>
+          <pre id="diagnostics" class="json-panel diagnostics"></pre>
+        </details>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
