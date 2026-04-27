@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import socket
 import sys
@@ -298,21 +299,82 @@ def run_desktop_app(app: FastAPI, host: str, port: int, *, no_browser: bool = Fa
             thread.join(timeout=3)
         return
 
+    pywebview_backend = pywebview_backend_name()
+    if sys.platform.startswith("linux") and pywebview_backend is None:
+        print(f"pywebview GUI backend is not available; opening browser at {url}")
+        browser_loop(server, thread, url)
+        return
+
     try:
         import webview
 
-        window = webview.create_window("A2A Tester", url, width=1320, height=900, min_size=(980, 700))
-        webview.start()
-    except Exception:
-        webbrowser.open(url)
-        try:
-            while thread.is_alive():
-                time.sleep(0.25)
-        except KeyboardInterrupt:
-            pass
+        desktop_api = DesktopApi(webview)
+        window = webview.create_window(
+            "A2A Tester",
+            url,
+            width=1320,
+            height=900,
+            min_size=(980, 700),
+            js_api=desktop_api,
+        )
+        desktop_api.window = window
+        start_kwargs = {"gui": pywebview_backend} if pywebview_backend else {}
+        webview.start(**start_kwargs)
+    except Exception as exc:
+        print(f"Could not start desktop window: {exc}. Opening browser at {url}")
+        browser_loop(server, thread, url)
+        return
     finally:
         server.should_exit = True
         thread.join(timeout=3)
+
+
+def browser_loop(server: uvicorn.Server, thread: threading.Thread, url: str) -> None:
+    webbrowser.open(url)
+    try:
+        while thread.is_alive():
+            time.sleep(0.25)
+    except KeyboardInterrupt:
+        try:
+            pass
+        finally:
+            server.should_exit = True
+            thread.join(timeout=3)
+
+
+def pywebview_backend_name() -> str | None:
+    if not sys.platform.startswith("linux"):
+        return None
+    has_qt_api = importlib.util.find_spec("PyQt6") is not None or importlib.util.find_spec("PySide6") is not None
+    if importlib.util.find_spec("qtpy") is not None and has_qt_api:
+        return "qt"
+    if importlib.util.find_spec("gi") is not None:
+        return "gtk"
+    return None
+
+
+class DesktopApi:
+    def __init__(self, webview_module: Any) -> None:
+        self.webview = webview_module
+        self.window: Any | None = None
+
+    def choose_certificate_path(self, field_name: str) -> str:
+        if self.window is None:
+            return ""
+        paths = self.window.create_file_dialog(
+            self.webview.OPEN_DIALOG,
+            allow_multiple=False,
+            file_types=certificate_dialog_file_types(field_name),
+        )
+        if not paths:
+            return ""
+        return str(paths[0])
+
+
+def certificate_dialog_file_types(field_name: str) -> tuple[str, ...]:
+    if field_name == "client_key_path":
+        return ("Private keys (*.pem;*.key;*.txt)", "All files (*.*)")
+    return ("Certificates (*.pem;*.crt;*.cer;*.bundle;*.chain;*.txt)", "All files (*.*)")
 
 
 def ensure_profile(db: Database) -> Profile:

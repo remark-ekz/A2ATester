@@ -75,6 +75,7 @@ python -m a2a_tester.main
 ```
 
 Backend стартует на локальном порту, после чего открывается desktop-окно через `pywebview`.
+На Linux приложение сначала проверяет наличие GUI-backend: GTK через `gi` или Qt через `qtpy` + `PyQt6`/`PySide6`. Если backend не найден, `pywebview` не стартует, чтобы не печатать traceback про GTK/QT, а UI открывается в обычном браузере.
 
 ### Portable-режим
 
@@ -368,6 +369,13 @@ TLS-настройки берутся из profile:
 - `client_cert_path`;
 - `client_key_path`.
 
+В UI есть два режима выбора файлов:
+
+- `Pick Path` - desktop-режим через `pywebview`, в profile сохраняется настоящий абсолютный путь к файлу;
+- `Import Copy` - браузерный file picker, файл копируется в `data/certificates/profile_{profile_id}/`, а в profile сохраняется путь к копии.
+
+Ограничение браузера: обычный `<input type="file">` не отдаёт frontend настоящие абсолютные пути локальной файловой системы. Поэтому в браузере невозможно корректно сохранить исходный путь без desktop API; для этого и нужен `Pick Path`.
+
 ### CA bundle
 
 CA bundle нужен, если сервер агента использует сертификат, который не доверен системным trust store.
@@ -603,13 +611,13 @@ POST /api/profiles/{profile_id}/certificates/{field_name}
 - `client_cert_path`;
 - `client_key_path`.
 
-Файл копируется в:
+Этот endpoint относится к режиму `Import Copy`. Файл копируется в:
 
 ```text
 data/certificates/profile_{profile_id}/
 ```
 
-После загрузки путь сохраняется в profile.
+После загрузки путь к копии сохраняется в profile. В режиме `Pick Path` upload endpoint не вызывается: desktop API возвращает абсолютный путь, frontend записывает его в поле profile, а затем обычное сохранение профиля отправляет путь на backend.
 
 ### Conversations
 

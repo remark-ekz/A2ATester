@@ -74,21 +74,33 @@
                   <span>CA bundle</span>
                   <input id="caBundlePath" type="text" />
                 </label>
-                <input id="caBundleFile" type="file" accept=".pem,.crt,.cer,.bundle,.chain,.txt" />
+                <div class="cert-actions">
+                  <button id="caBundlePickPath" class="ghost" type="button">Pick Path</button>
+                  <button id="caBundleImportBtn" class="ghost" type="button">Import Copy</button>
+                  <input id="caBundleFile" class="cert-file-input" type="file" accept=".pem,.crt,.cer,.bundle,.chain,.txt" />
+                </div>
               </div>
               <div class="file-row">
                 <label>
                   <span>Client certificate</span>
                   <input id="clientCertPath" type="text" />
                 </label>
-                <input id="clientCertFile" type="file" accept=".pem,.crt,.cer,.bundle,.chain,.txt" />
+                <div class="cert-actions">
+                  <button id="clientCertPickPath" class="ghost" type="button">Pick Path</button>
+                  <button id="clientCertImportBtn" class="ghost" type="button">Import Copy</button>
+                  <input id="clientCertFile" class="cert-file-input" type="file" accept=".pem,.crt,.cer,.bundle,.chain,.txt" />
+                </div>
               </div>
               <div class="file-row">
                 <label>
                   <span>Client key</span>
                   <input id="clientKeyPath" type="text" />
                 </label>
-                <input id="clientKeyFile" type="file" accept=".pem,.key,.txt" />
+                <div class="cert-actions">
+                  <button id="clientKeyPickPath" class="ghost" type="button">Pick Path</button>
+                  <button id="clientKeyImportBtn" class="ghost" type="button">Import Copy</button>
+                  <input id="clientKeyFile" class="cert-file-input" type="file" accept=".pem,.key,.txt" />
+                </div>
               </div>
             </div>
           </details>

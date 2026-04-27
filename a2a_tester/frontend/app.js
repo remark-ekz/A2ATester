@@ -9,6 +9,9 @@ const state = {
   theme: "studio",
   palettes: [],
   busy: false,
+  busyLabel: "",
+  busyStartedAt: 0,
+  busyTimer: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -24,8 +27,11 @@ const els = {
   timeoutSeconds: $("timeoutSeconds"),
   tlsVerify: $("tlsVerify"),
   caBundlePath: $("caBundlePath"),
+  caBundleFile: $("caBundleFile"),
   clientCertPath: $("clientCertPath"),
+  clientCertFile: $("clientCertFile"),
   clientKeyPath: $("clientKeyPath"),
+  clientKeyFile: $("clientKeyFile"),
   metadataJson: $("metadataJson"),
   taskId: $("taskId"),
   agentCard: $("agentCard"),
@@ -62,11 +68,50 @@ function setStatus(text) {
   els.status.textContent = text || "Ready";
 }
 
-function setBusy(busy) {
+function setBusy(busy, label = "Waiting for response") {
   state.busy = busy;
+  document.body.dataset.busy = busy ? "true" : "false";
   for (const id of ["sendBtn", "streamBtn", "saveProfileBtn", "agentCardBtn", "getTaskBtn", "cancelTaskBtn"]) {
     $(id).disabled = busy;
   }
+  if (busy) {
+    startBusyTimer(label);
+  } else {
+    stopBusyTimer();
+  }
+}
+
+function startBusyTimer(label) {
+  stopBusyTimer(false);
+  state.busyLabel = label;
+  state.busyStartedAt = performance.now();
+  updateBusyStatus();
+  state.busyTimer = window.setInterval(updateBusyStatus, 250);
+}
+
+function stopBusyTimer(resetStatus = true) {
+  if (state.busyTimer) {
+    window.clearInterval(state.busyTimer);
+    state.busyTimer = null;
+  }
+  if (resetStatus && state.busyLabel) {
+    state.busyLabel = "";
+    state.busyStartedAt = 0;
+  }
+}
+
+function updateBusyStatus() {
+  if (!state.busyStartedAt) return;
+  const elapsed = Math.max(0, (performance.now() - state.busyStartedAt) / 1000);
+  setStatus(`${state.busyLabel} · ${elapsed.toFixed(1)}s`);
+}
+
+function statusWithLatency(status, conversation = state.conversation) {
+  const latest = conversation?.diagnostics?.at(-1);
+  if (!latest?.latencyMs || /streaming/i.test(status || "")) {
+    return status || "Ready";
+  }
+  return `${status || "Ready"} · ${(latest.latencyMs / 1000).toFixed(1)}s`;
 }
 
 function escapeHtml(value) {
@@ -365,7 +410,7 @@ async function newChat() {
 async function sendMessage(stream = false) {
   const text = els.messageInput.value.trim();
   if (!text) return;
-  setBusy(true);
+  setBusy(true, stream ? "Streaming response" : "Waiting for response");
   try {
     await saveProfile(false);
     if (stream) {
@@ -426,11 +471,11 @@ function applyConversationUpdate(data) {
   state.selectedConversationId = state.conversation?.id || state.selectedConversationId;
   renderConversations();
   renderConversation();
-  setStatus(data.status || "Ready");
+  setStatus(statusWithLatency(data.status || "Ready", state.conversation));
 }
 
 async function taskRequest(method) {
-  setBusy(true);
+  setBusy(true, method === "get" ? "Getting task" : "Cancelling task");
   try {
     await saveProfile(false);
     const data = await api(`/api/tasks/${method}`, {
@@ -450,7 +495,7 @@ async function taskRequest(method) {
 }
 
 async function loadAgentCard() {
-  setBusy(true);
+  setBusy(true, "Loading Agent Card");
   try {
     await saveProfile(false);
     const data = await api("/api/agent-card", {
@@ -465,7 +510,7 @@ async function loadAgentCard() {
       state.conversation = data.conversation;
       renderConversation();
     }
-    setStatus(data.status);
+    setStatus(statusWithLatency(data.status, data.conversation));
   } catch (error) {
     setStatus(error.message);
   } finally {
@@ -487,12 +532,29 @@ async function uploadCert(input, fieldName, targetInput) {
     state.profile = { ...state.profile, ...data.profile };
     syncProfileDraftFromForm();
     renderProfileSelect();
-    setStatus("Certificate saved");
+    setStatus("Certificate copy imported");
   } catch (error) {
     setStatus(error.message);
   } finally {
     input.value = "";
   }
+}
+
+async function pickCertificatePath(fieldName, targetInput) {
+  if (window.pywebview?.api?.choose_certificate_path) {
+    try {
+      const path = await window.pywebview.api.choose_certificate_path(fieldName);
+      if (!path) return;
+      targetInput.value = path;
+      syncProfileDraftFromForm();
+      await saveProfile(false);
+      setStatus("Certificate path selected and saved");
+      return;
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }
+  setStatus("Desktop file dialog unavailable. Paste absolute path or use Import Copy.");
 }
 
 function wireEvents() {
@@ -521,9 +583,15 @@ function wireEvents() {
     document.body.dataset.theme = state.theme;
     await api("/api/settings/theme", { method: "POST", body: JSON.stringify({ theme: state.theme }) });
   });
-  $("caBundleFile").addEventListener("change", () => uploadCert($("caBundleFile"), "ca_bundle_path", els.caBundlePath));
-  $("clientCertFile").addEventListener("change", () => uploadCert($("clientCertFile"), "client_cert_path", els.clientCertPath));
-  $("clientKeyFile").addEventListener("change", () => uploadCert($("clientKeyFile"), "client_key_path", els.clientKeyPath));
+  $("caBundlePickPath").addEventListener("click", () => pickCertificatePath("ca_bundle_path", els.caBundlePath));
+  $("clientCertPickPath").addEventListener("click", () => pickCertificatePath("client_cert_path", els.clientCertPath));
+  $("clientKeyPickPath").addEventListener("click", () => pickCertificatePath("client_key_path", els.clientKeyPath));
+  $("caBundleImportBtn").addEventListener("click", () => els.caBundleFile.click());
+  $("clientCertImportBtn").addEventListener("click", () => els.clientCertFile.click());
+  $("clientKeyImportBtn").addEventListener("click", () => els.clientKeyFile.click());
+  els.caBundleFile.addEventListener("change", () => uploadCert(els.caBundleFile, "ca_bundle_path", els.caBundlePath));
+  els.clientCertFile.addEventListener("change", () => uploadCert(els.clientCertFile, "client_cert_path", els.clientCertPath));
+  els.clientKeyFile.addEventListener("change", () => uploadCert(els.clientKeyFile, "client_key_path", els.clientKeyPath));
   wireProfileDraftEvents();
   els.messageInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
