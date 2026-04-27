@@ -106,8 +106,14 @@ function profileFormPayload() {
   };
 }
 
+function syncProfileDraftFromForm() {
+  if (!state.profile) return;
+  Object.assign(state.profile, profileFormPayload());
+}
+
 async function saveProfile(showStatus = true) {
   if (!state.selectedProfileId) return;
+  syncProfileDraftFromForm();
   const payload = profileFormPayload();
   JSON.parse(payload.metadataJson || "{}");
   const data = await api(`/api/profiles/${state.selectedProfileId}`, {
@@ -469,6 +475,7 @@ async function loadAgentCard() {
 
 async function uploadCert(input, fieldName, targetInput) {
   if (!input.files?.length || !state.selectedProfileId) return;
+  syncProfileDraftFromForm();
   const form = new FormData();
   form.append("file", input.files[0]);
   try {
@@ -477,7 +484,9 @@ async function uploadCert(input, fieldName, targetInput) {
       body: form,
     });
     targetInput.value = data.path;
-    state.profile = data.profile;
+    state.profile = { ...state.profile, ...data.profile };
+    syncProfileDraftFromForm();
+    renderProfileSelect();
     setStatus("Certificate saved");
   } catch (error) {
     setStatus(error.message);
@@ -515,11 +524,28 @@ function wireEvents() {
   $("caBundleFile").addEventListener("change", () => uploadCert($("caBundleFile"), "ca_bundle_path", els.caBundlePath));
   $("clientCertFile").addEventListener("change", () => uploadCert($("clientCertFile"), "client_cert_path", els.clientCertPath));
   $("clientKeyFile").addEventListener("change", () => uploadCert($("clientKeyFile"), "client_key_path", els.clientKeyPath));
+  wireProfileDraftEvents();
   els.messageInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       sendMessage(false);
     }
   });
+}
+
+function wireProfileDraftEvents() {
+  for (const element of [
+    els.profileName,
+    els.endpoint,
+    els.timeoutSeconds,
+    els.caBundlePath,
+    els.clientCertPath,
+    els.clientKeyPath,
+    els.metadataJson,
+  ]) {
+    element.addEventListener("input", syncProfileDraftFromForm);
+  }
+  els.protocolVersion.addEventListener("change", syncProfileDraftFromForm);
+  els.tlsVerify.addEventListener("change", syncProfileDraftFromForm);
 }
 
 async function init() {
