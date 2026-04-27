@@ -388,6 +388,13 @@ def conversation_payload(db: Database, conversation_id: int) -> dict[str, Any]:
 
 
 def messages_payload(db: Database, conversation_id: int) -> list[dict[str, Any]]:
+    http_events = db.list_http_events(conversation_id)
+    if http_events:
+        return messages_payload_from_http_events(db, conversation_id, http_events)
+    return stored_messages_payload(db, conversation_id)
+
+
+def stored_messages_payload(db: Database, conversation_id: int) -> list[dict[str, Any]]:
     return [
         {
             "id": row["id"],
@@ -400,6 +407,119 @@ def messages_payload(db: Database, conversation_id: int) -> list[dict[str, Any]]
         }
         for row in db.list_messages(conversation_id)
     ]
+
+
+def messages_payload_from_http_events(db: Database, conversation_id: int, http_events: list[Any]) -> list[dict[str, Any]]:
+    user_messages = [row for row in db.list_messages(conversation_id) if row["role"] == "user"]
+    user_by_message_id = {
+        str(raw.get("messageId")): row
+        for row in user_messages
+        for raw in [loads(row["raw_json"], {})]
+        if isinstance(raw, dict) and raw.get("messageId")
+    }
+    emitted_user_ids: set[int] = set()
+    emitted_render_items: set[str] = set()
+    payload: list[dict[str, Any]] = []
+
+    for event in http_events:
+        request_json = loads(event["request_json"], {})
+        request_message = request_json.get("params", {}).get("message") if isinstance(request_json, dict) else None
+        if isinstance(request_message, dict):
+            row = user_by_message_id.get(str(request_message.get("messageId") or ""))
+            if row is not None and row["id"] not in emitted_user_ids:
+                payload.append(message_row_payload(row))
+                emitted_user_ids.add(row["id"])
+            elif row is None:
+                payload.append(render_item_payload(
+                    f"request-{event['id']}",
+                    RenderItem(
+                        role="user",
+                        kind="message",
+                        text=parts_to_text_for_payload(request_message),
+                        raw=request_message,
+                        task_id=str(request_message.get("taskId") or ""),
+                    ),
+                    event["created_at"],
+                ))
+
+        if event["error"]:
+            payload.append({
+                "id": f"error-{event['id']}",
+                "role": "system",
+                "kind": "error",
+                "text": event["error"],
+                "taskId": "",
+                "raw": loads(event["response_json"], {}),
+                "createdAt": event["created_at"],
+            })
+
+        response_json = loads(event["response_json"], {})
+        render_source = event_render_source(response_json)
+        if render_source is None:
+            continue
+
+        for item_index, item in enumerate(extract_render_items(render_source)):
+            if item.kind == "message" and item.role == "user":
+                continue
+            item_key = render_item_key(item)
+            if item_key in emitted_render_items:
+                continue
+            emitted_render_items.add(item_key)
+            payload.append(render_item_payload(f"http-{event['id']}-{item_index}", item, event["created_at"]))
+
+    for row in user_messages:
+        if row["id"] not in emitted_user_ids:
+            payload.append(message_row_payload(row))
+
+    return payload
+
+
+def event_render_source(response_json: Any) -> dict[str, Any] | None:
+    if not isinstance(response_json, dict) or response_json.get("stream") == "opened":
+        return None
+    if response_json.get("type") == "event" and isinstance(response_json.get("payload"), dict):
+        return response_json["payload"]
+    return response_json
+
+
+def message_row_payload(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "role": row["role"],
+        "kind": row["kind"],
+        "text": row["text"],
+        "taskId": row["task_id"],
+        "raw": loads(row["raw_json"], {}),
+        "createdAt": row["created_at"],
+    }
+
+
+def render_item_payload(item_id: str, item: RenderItem, created_at: str) -> dict[str, Any]:
+    return {
+        "id": item_id,
+        "role": item.role,
+        "kind": item.kind,
+        "text": item.text,
+        "taskId": item.task_id,
+        "raw": item.raw,
+        "createdAt": created_at,
+    }
+
+
+def render_item_key(item: RenderItem) -> str:
+    return "|".join([
+        item.role,
+        item.kind,
+        item.task_id,
+        json.dumps(item.raw, ensure_ascii=False, sort_keys=True),
+    ])
+
+
+def parts_to_text_for_payload(message: dict[str, Any]) -> str:
+    for item in extract_render_items(message):
+        if item.kind == "message":
+            return item.text
+    return pretty_json(message)
 
 
 def diagnostics_payload(db: Database, conversation_id: int) -> list[dict[str, Any]]:

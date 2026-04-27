@@ -531,7 +531,7 @@ class Database:
             """
             SELECT * FROM http_events
             WHERE conversation_id = ?
-            ORDER BY created_at ASC, id ASC
+            ORDER BY id ASC
             """,
             (conversation_id,),
         ).fetchall()
