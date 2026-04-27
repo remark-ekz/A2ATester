@@ -75,7 +75,7 @@ def extract_context_id(value: Any) -> str:
 def extract_task_id(value: Any) -> str:
     if isinstance(value, dict):
         task_id = value.get("taskId") or value.get("task_id") or value.get("id") or ""
-        if task_id and ("status" in value or "artifacts" in value or value.get("kind") == "task"):
+        if task_id and _looks_like_task_container(value):
             return str(task_id)
         for child in value.values():
             found = extract_task_id(child)
@@ -123,42 +123,64 @@ def _walk(value: Any, items: list[RenderItem]) -> None:
         return
 
     context_id = str(value.get("contextId") or value.get("context_id") or "")
-    task_id = str(value.get("taskId") or value.get("task_id") or "")
-
-    if "status" in value and isinstance(value["status"], dict):
-        status = value["status"]
-        state = status.get("state", "unknown")
-        message = status.get("message")
-        items.append(
-            RenderItem(
-                role="system",
-                kind="status",
-                text=f"Task status: {state}",
-                raw=value,
-                task_id=task_id or extract_task_id(value),
-                context_id=context_id or extract_context_id(value),
-            )
-        )
-        if isinstance(message, dict):
-            _message_to_item(message, items, fallback_task_id=task_id, fallback_context_id=context_id)
-
-    if "artifact" in value and isinstance(value["artifact"], dict):
-        _artifact_to_item(value["artifact"], items, task_id=task_id, context_id=context_id)
-
-    artifacts = value.get("artifacts")
-    if isinstance(artifacts, list):
-        for artifact in artifacts:
-            if isinstance(artifact, dict):
-                _artifact_to_item(artifact, items, task_id=task_id, context_id=context_id)
+    task_id = str(value.get("taskId") or value.get("task_id") or extract_task_id(value))
 
     if "role" in value and "parts" in value:
         _message_to_item(value, items, fallback_task_id=task_id, fallback_context_id=context_id)
         return
 
-    for key in ("message", "messages", "history", "result", "data"):
-        child = value.get(key)
-        if isinstance(child, (dict, list)):
+    for key, child in value.items():
+        if key == "status" and isinstance(child, dict):
+            _status_to_item(child, items, raw=value, task_id=task_id, context_id=context_id)
+            continue
+
+        if key == "artifact" and isinstance(child, dict):
+            _artifact_to_item(child, items, task_id=task_id, context_id=context_id)
+            continue
+
+        if key == "artifacts" and isinstance(child, list):
+            for artifact in child:
+                if isinstance(artifact, dict):
+                    _artifact_to_item(artifact, items, task_id=task_id, context_id=context_id)
+            continue
+
+        if key in {"message", "messages", "history", "result", "data"} and isinstance(child, (dict, list)):
             _walk(child, items)
+
+
+def _looks_like_task_container(value: dict[str, Any]) -> bool:
+    kind = str(value.get("kind") or "").lower()
+    return (
+        "status" in value
+        or "artifact" in value
+        or "artifacts" in value
+        or "history" in value
+        or kind in {"task", "status-update", "artifact-update", "taskstatusupdateevent", "taskartifactupdateevent"}
+    )
+
+
+def _status_to_item(
+    status: dict[str, Any],
+    items: list[RenderItem],
+    *,
+    raw: dict[str, Any],
+    task_id: str = "",
+    context_id: str = "",
+) -> None:
+    state = str(status.get("state", "unknown"))
+    items.append(
+        RenderItem(
+            role="system",
+            kind="status",
+            text=f"Task status: {state}",
+            raw=raw,
+            task_id=task_id or extract_task_id(raw),
+            context_id=context_id or extract_context_id(raw),
+        )
+    )
+    message = status.get("message")
+    if isinstance(message, dict):
+        _message_to_item(message, items, fallback_task_id=task_id, fallback_context_id=context_id)
 
 
 def _message_to_item(

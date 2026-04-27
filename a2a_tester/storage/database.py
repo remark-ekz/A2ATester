@@ -408,6 +408,35 @@ class Database:
             (conversation_id,),
         ).fetchall()
 
+    def message_exists(
+        self,
+        *,
+        conversation_id: int,
+        role: str,
+        kind: str,
+        task_id: str = "",
+        raw_json: Any | None = None,
+    ) -> bool:
+        row = self.db.execute(
+            """
+            SELECT id FROM messages
+            WHERE conversation_id = ?
+              AND role = ?
+              AND kind = ?
+              AND task_id = ?
+              AND raw_json = ?
+            LIMIT 1
+            """,
+            (
+                conversation_id,
+                role,
+                kind,
+                task_id,
+                dumps(raw_json if raw_json is not None else {}),
+            ),
+        ).fetchone()
+        return row is not None
+
     def add_artifact(
         self,
         *,

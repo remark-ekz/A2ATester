@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import ssl
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urlparse, urlunparse
 
@@ -32,20 +34,43 @@ class HttpExchange:
     error: str = ""
 
 
-def _verify_value(config: A2ARequestConfig) -> bool | str:
+def _uses_tls(endpoint: str) -> bool:
+    return urlparse(endpoint).scheme.lower() == "https"
+
+
+def _existing_path(value: str, label: str) -> str:
+    path = Path(value).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(f"{label} not found: {path}")
+    if not path.is_file():
+        raise ValueError(f"{label} is not a file: {path}")
+    return str(path)
+
+
+def _verify_value(config: A2ARequestConfig) -> bool | ssl.SSLContext:
+    if not _uses_tls(config.endpoint):
+        return True
+
+    has_custom_tls = bool(config.ca_bundle_path or config.client_cert_path or config.client_key_path)
     if not config.tls_verify:
-        return False
-    if config.ca_bundle_path:
-        return config.ca_bundle_path
-    return True
+        if not has_custom_tls:
+            return False
+        context = ssl._create_unverified_context()
+    elif has_custom_tls:
+        context = ssl.create_default_context(
+            cafile=_existing_path(config.ca_bundle_path, "CA bundle") if config.ca_bundle_path else None
+        )
+    else:
+        return True
 
+    if config.client_cert_path or config.client_key_path:
+        if not config.client_cert_path:
+            raise ValueError("Client certificate is required when client key is configured")
+        certfile = _existing_path(config.client_cert_path, "Client certificate")
+        keyfile = _existing_path(config.client_key_path, "Client key") if config.client_key_path else None
+        context.load_cert_chain(certfile=certfile, keyfile=keyfile)
 
-def _cert_value(config: A2ARequestConfig) -> str | tuple[str, str] | None:
-    if config.client_cert_path and config.client_key_path:
-        return (config.client_cert_path, config.client_key_path)
-    if config.client_cert_path:
-        return config.client_cert_path
-    return None
+    return context
 
 
 def _headers(config: A2ARequestConfig, *, stream: bool = False) -> dict[str, str]:
@@ -63,7 +88,6 @@ def post_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> Htt
     try:
         with httpx.Client(
             verify=_verify_value(config),
-            cert=_cert_value(config),
             timeout=config.timeout_seconds,
         ) as client:
             response = client.post(config.endpoint, json=request_json, headers=_headers(config))
@@ -97,7 +121,6 @@ def stream_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> I
     started = time.perf_counter()
     with httpx.Client(
         verify=_verify_value(config),
-        cert=_cert_value(config),
         timeout=httpx.Timeout(config.timeout_seconds, read=None),
     ) as client:
         with client.stream(
@@ -141,7 +164,6 @@ def fetch_agent_card(config: A2ARequestConfig) -> HttpExchange:
     try:
         with httpx.Client(
             verify=_verify_value(config),
-            cert=_cert_value(config),
             timeout=config.timeout_seconds,
         ) as client:
             response = client.get(url, headers=config.headers)

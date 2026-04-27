@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import socket
 import sys
 import threading
@@ -12,7 +11,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from a2a_tester.a2a.client import A2ARequestConfig, HttpExchange, fetch_agent_card, post_json_rpc, stream_json_rpc
@@ -23,6 +22,7 @@ from a2a_tester.storage.database import Database, Profile, loads
 
 SECRET_HEADER_NAMES = {"authorization", "cookie", "x-api-key", "api-key", "proxy-authorization"}
 INPUT_REQUIRED_STATES = {"input-required", "input_required"}
+CERTIFICATE_UPLOAD_LIMIT_BYTES = 2 * 1024 * 1024
 
 
 def frontend_dir() -> Path:
@@ -94,6 +94,10 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
     async def update_profile(profile_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         profile = db.get_profile(profile_id)
         metadata = parse_metadata(payload.get("metadataJson", profile.metadata_json))
+        ca_bundle_path = str(payload.get("caBundlePath") or "")
+        client_cert_path = str(payload.get("clientCertPath") or "")
+        client_key_path = str(payload.get("clientKeyPath") or "")
+        validate_certificate_paths(ca_bundle_path, client_cert_path, client_key_path)
         db.update_profile(
             profile_id,
             name=str(payload.get("name") or profile.name),
@@ -101,9 +105,9 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             headers_json=pretty_json(headers_to_storage(payload.get("headers") or [])),
             metadata_json=pretty_json(metadata),
             tls_verify=bool(payload.get("tlsVerify", True)),
-            ca_bundle_path=str(payload.get("caBundlePath") or ""),
-            client_cert_path=str(payload.get("clientCertPath") or ""),
-            client_key_path=str(payload.get("clientKeyPath") or ""),
+            ca_bundle_path=ca_bundle_path,
+            client_cert_path=client_cert_path,
+            client_key_path=client_key_path,
             timeout_seconds=float(payload.get("timeoutSeconds") or 60),
             protocol_version=str(payload.get("protocolVersion") or "1.0"),
         )
@@ -118,8 +122,10 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         cert_dir.mkdir(parents=True, exist_ok=True)
         source_name = Path(file.filename or field_name)
         destination = cert_dir / f"{field_name}{source_name.suffix}"
+        contents = await file.read()
+        validate_certificate_upload(field_name, source_name.name, contents)
         with destination.open("wb") as handle:
-            shutil.copyfileobj(file.file, handle)
+            handle.write(contents)
 
         values = {
             "ca_bundle_path": profile.ca_bundle_path,
@@ -473,6 +479,8 @@ def persist_payload(db: Database, conversation_id: int, payload: dict[str, Any])
 def persist_render_item(db: Database, conversation_id: int, item: RenderItem) -> None:
     if item.context_id:
         db.update_conversation_context(conversation_id, item.context_id)
+    if should_skip_render_item(db, conversation_id, item):
+        return
     db.add_message(
         conversation_id=conversation_id,
         role=item.role,
@@ -491,6 +499,18 @@ def persist_render_item(db: Database, conversation_id: int, item: RenderItem) ->
             content_json=item.artifact_json,
             raw_json=item.raw,
         )
+
+
+def should_skip_render_item(db: Database, conversation_id: int, item: RenderItem) -> bool:
+    if item.kind == "message" and item.role == "user":
+        return True
+    return db.message_exists(
+        conversation_id=conversation_id,
+        role=item.role,
+        kind=item.kind,
+        task_id=item.task_id,
+        raw_json=item.raw,
+    )
 
 
 def headers_records(headers: Any) -> list[dict[str, Any]]:
@@ -542,6 +562,54 @@ def parse_metadata(value: Any) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise HTTPException(status_code=400, detail="Metadata must be a JSON object")
     return parsed
+
+
+def validate_certificate_paths(ca_bundle_path: str, client_cert_path: str, client_key_path: str) -> None:
+    if client_key_path and not client_cert_path:
+        raise HTTPException(status_code=400, detail="Client certificate is required when client key is configured")
+
+    for field_name, path in {
+        "ca_bundle_path": ca_bundle_path,
+        "client_cert_path": client_cert_path,
+        "client_key_path": client_key_path,
+    }.items():
+        if not path:
+            continue
+        path_obj = Path(path).expanduser()
+        if not path_obj.exists():
+            raise HTTPException(status_code=400, detail=f"{certificate_label(field_name)} not found: {path_obj}")
+        if not path_obj.is_file():
+            raise HTTPException(status_code=400, detail=f"{certificate_label(field_name)} is not a file: {path_obj}")
+        validate_certificate_upload(field_name, path_obj.name, path_obj.read_bytes())
+
+
+def validate_certificate_upload(field_name: str, filename: str, contents: bytes) -> None:
+    if not contents:
+        raise HTTPException(status_code=400, detail=f"{certificate_label(field_name)} file is empty")
+    if len(contents) > CERTIFICATE_UPLOAD_LIMIT_BYTES:
+        raise HTTPException(status_code=400, detail=f"{certificate_label(field_name)} is too large")
+
+    if field_name in {"ca_bundle_path", "client_cert_path"}:
+        if b"-----BEGIN CERTIFICATE-----" not in contents:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{certificate_label(field_name)} must be a PEM certificate file with BEGIN CERTIFICATE: {filename}",
+            )
+        return
+
+    if field_name == "client_key_path" and b"PRIVATE KEY-----" not in contents:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{certificate_label(field_name)} must be a PEM private key file: {filename}",
+        )
+
+
+def certificate_label(field_name: str) -> str:
+    return {
+        "ca_bundle_path": "CA bundle",
+        "client_cert_path": "Client certificate",
+        "client_key_path": "Client key",
+    }.get(field_name, "Certificate")
 
 
 def latest_task_id(db: Database, conversation_id: int | None) -> str:

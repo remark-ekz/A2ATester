@@ -12,6 +12,8 @@ A2A Tester - локальное приложение для тестирован
 - SQLite-база для профилей, чатов, сообщений, артефактов и HTTP diagnostics.
 - Сборка в один исполняемый файл через PyInstaller.
 
+Подробное описание архитектуры, базы, request lifecycle, TLS, diagnostics и порядка отображения A2A-событий находится в [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md).
+
 ## Возможности
 
 - Профили подключений к разным A2A-хостам.
