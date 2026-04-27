@@ -403,7 +403,7 @@ class Database:
             """
             SELECT * FROM messages
             WHERE conversation_id = ?
-            ORDER BY created_at ASC, id ASC
+            ORDER BY id ASC
             """,
             (conversation_id,),
         ).fetchall()

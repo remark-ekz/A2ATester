@@ -167,8 +167,28 @@ def _status_to_item(
     task_id: str = "",
     context_id: str = "",
 ) -> None:
+    status_added = False
+    for key, child in status.items():
+        if key == "message" and isinstance(child, dict):
+            _message_to_item(child, items, fallback_task_id=task_id, fallback_context_id=context_id)
+            continue
+        if key == "state":
+            items.append(_status_render_item(status, raw=raw, task_id=task_id, context_id=context_id))
+            status_added = True
+
+    if not status_added and "message" not in status:
+        items.append(_status_render_item(status, raw=raw, task_id=task_id, context_id=context_id))
+
+
+def _status_render_item(
+    status: dict[str, Any],
+    *,
+    raw: dict[str, Any],
+    task_id: str = "",
+    context_id: str = "",
+) -> RenderItem:
     state = str(status.get("state", "unknown"))
-    items.append(
+    return (
         RenderItem(
             role="system",
             kind="status",
@@ -178,9 +198,6 @@ def _status_to_item(
             context_id=context_id or extract_context_id(raw),
         )
     )
-    message = status.get("message")
-    if isinstance(message, dict):
-        _message_to_item(message, items, fallback_task_id=task_id, fallback_context_id=context_id)
 
 
 def _message_to_item(
