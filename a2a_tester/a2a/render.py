@@ -129,6 +129,10 @@ def _walk(value: Any, items: list[RenderItem]) -> None:
         _message_to_item(value, items, fallback_task_id=task_id, fallback_context_id=context_id)
         return
 
+    if _is_task_snapshot(value):
+        _task_snapshot_to_items(value, items, task_id=task_id, context_id=context_id)
+        return
+
     for key, child in value.items():
         if key == "status" and isinstance(child, dict):
             _status_to_item(child, items, raw=value, task_id=task_id, context_id=context_id)
@@ -157,6 +161,32 @@ def _looks_like_task_container(value: dict[str, Any]) -> bool:
         or "history" in value
         or kind in {"task", "status-update", "artifact-update", "taskstatusupdateevent", "taskartifactupdateevent"}
     )
+
+
+def _is_task_snapshot(value: dict[str, Any]) -> bool:
+    return str(value.get("kind") or "").lower() == "task"
+
+
+def _task_snapshot_to_items(
+    task: dict[str, Any],
+    items: list[RenderItem],
+    *,
+    task_id: str = "",
+    context_id: str = "",
+) -> None:
+    history = task.get("history")
+    if isinstance(history, list):
+        _walk(history, items)
+
+    artifacts = task.get("artifacts")
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if isinstance(artifact, dict):
+                _artifact_to_item(artifact, items, task_id=task_id, context_id=context_id)
+
+    status = task.get("status")
+    if isinstance(status, dict):
+        _status_to_item(status, items, raw=task, task_id=task_id, context_id=context_id)
 
 
 def _status_to_item(
@@ -193,11 +223,20 @@ def _status_render_item(
             role="system",
             kind="status",
             text=f"Task status: {state}",
-            raw=raw,
+            raw=_status_raw(status, raw),
             task_id=task_id or extract_task_id(raw),
             context_id=context_id or extract_context_id(raw),
         )
     )
+
+
+def _status_raw(status: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    status_payload = {key: value for key, value in status.items() if key != "message"}
+    payload: dict[str, Any] = {"status": status_payload}
+    for key in ("id", "kind", "taskId", "task_id", "contextId", "context_id", "final"):
+        if key in raw:
+            payload[key] = raw[key]
+    return payload
 
 
 def _message_to_item(
