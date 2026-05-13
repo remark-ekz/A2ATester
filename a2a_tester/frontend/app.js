@@ -358,10 +358,245 @@ function renderMessage(message) {
     <div class="message-row ${side}">
       <div class="bubble ${kind}">
         <div class="bubble-label">${escapeHtml(label)}</div>
-        <pre>${escapeHtml(message.text || "")}</pre>
+        <div class="markdown-body">${renderMarkdown(message.text || "")}</div>
       </div>
     </div>
   `;
+}
+
+function renderMarkdown(value) {
+  const text = String(value ?? "").replace(/\r\n?/g, "\n");
+  return splitMarkdownFences(text)
+    .map((segment) => {
+      if (segment.type === "code") {
+        const language = segment.language ? ` data-language="${escapeAttribute(segment.language)}"` : "";
+        return `<pre class="md-code"${language}><code>${escapeHtml(segment.text)}</code></pre>`;
+      }
+      return renderMarkdownBlocks(segment.text);
+    })
+    .join("");
+}
+
+function splitMarkdownFences(text) {
+  const segments = [];
+  const lines = text.split("\n");
+  let textBuffer = [];
+  let codeBuffer = [];
+  let fenceChar = "";
+  let fenceLength = 0;
+  let language = "";
+
+  const flushText = () => {
+    if (textBuffer.length) {
+      segments.push({ type: "text", text: textBuffer.join("\n") });
+      textBuffer = [];
+    }
+  };
+
+  for (const line of lines) {
+    const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})\s*([^`]*)$/);
+    if (!fenceChar && fenceMatch) {
+      flushText();
+      fenceChar = fenceMatch[1][0];
+      fenceLength = fenceMatch[1].length;
+      language = String(fenceMatch[2] || "").trim().split(/\s+/)[0] || "";
+      codeBuffer = [];
+      continue;
+    }
+
+    if (fenceChar) {
+      const closeMatch = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
+      if (closeMatch && closeMatch[1][0] === fenceChar && closeMatch[1].length >= fenceLength) {
+        segments.push({ type: "code", text: codeBuffer.join("\n"), language });
+        fenceChar = "";
+        fenceLength = 0;
+        language = "";
+        codeBuffer = [];
+      } else {
+        codeBuffer.push(line);
+      }
+      continue;
+    }
+
+    textBuffer.push(line);
+  }
+
+  if (fenceChar) {
+    segments.push({ type: "code", text: codeBuffer.join("\n"), language });
+  }
+  flushText();
+  return segments;
+}
+
+function renderMarkdownBlocks(text) {
+  const lines = text.split("\n");
+  const html = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+
+    const heading = line.match(/^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
+    if (heading) {
+      const level = heading[1].length;
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    if (/^ {0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+      html.push("<hr>");
+      index += 1;
+      continue;
+    }
+
+    if (/^ {0,3}>\s?/.test(line)) {
+      const quoteLines = [];
+      while (index < lines.length && /^ {0,3}>\s?/.test(lines[index])) {
+        quoteLines.push(lines[index].replace(/^ {0,3}>\s?/, ""));
+        index += 1;
+      }
+      html.push(`<blockquote>${renderMarkdownBlocks(quoteLines.join("\n"))}</blockquote>`);
+      continue;
+    }
+
+    if (isMarkdownTableStart(lines, index)) {
+      const { markup, nextIndex } = renderMarkdownTable(lines, index);
+      html.push(markup);
+      index = nextIndex;
+      continue;
+    }
+
+    const unordered = line.match(/^ {0,3}[-*+]\s+(.+)$/);
+    if (unordered) {
+      const items = [];
+      while (index < lines.length) {
+        const item = lines[index].match(/^ {0,3}[-*+]\s+(.+)$/);
+        if (!item) break;
+        items.push(`<li>${renderInlineMarkdown(item[1])}</li>`);
+        index += 1;
+      }
+      html.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+
+    const ordered = line.match(/^ {0,3}\d+[.)]\s+(.+)$/);
+    if (ordered) {
+      const items = [];
+      while (index < lines.length) {
+        const item = lines[index].match(/^ {0,3}\d+[.)]\s+(.+)$/);
+        if (!item) break;
+        items.push(`<li>${renderInlineMarkdown(item[1])}</li>`);
+        index += 1;
+      }
+      html.push(`<ol>${items.join("")}</ol>`);
+      continue;
+    }
+
+    const paragraphLines = [];
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines, index)) {
+      paragraphLines.push(lines[index]);
+      index += 1;
+    }
+    if (paragraphLines.length) {
+      html.push(`<p>${paragraphLines.map(renderInlineMarkdown).join("<br>")}</p>`);
+    } else {
+      index += 1;
+    }
+  }
+
+  return html.join("");
+}
+
+function isMarkdownBlockStart(lines, index) {
+  const line = lines[index] || "";
+  return (
+    /^ {0,3}(#{1,6})\s+/.test(line) ||
+    /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line) ||
+    /^ {0,3}>\s?/.test(line) ||
+    /^ {0,3}[-*+]\s+/.test(line) ||
+    /^ {0,3}\d+[.)]\s+/.test(line) ||
+    isMarkdownTableStart(lines, index)
+  );
+}
+
+function isMarkdownTableStart(lines, index) {
+  const header = lines[index] || "";
+  const separator = lines[index + 1] || "";
+  return header.includes("|") && /^ {0,3}\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(separator);
+}
+
+function renderMarkdownTable(lines, index) {
+  const rows = [];
+  rows.push(splitMarkdownTableRow(lines[index]));
+  index += 2;
+  while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+    rows.push(splitMarkdownTableRow(lines[index]));
+    index += 1;
+  }
+
+  const header = rows.shift() || [];
+  const head = header.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join("");
+  const body = rows
+    .map((row) => `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>`)
+    .join("");
+  return {
+    markup: `<div class="md-table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`,
+    nextIndex: index,
+  };
+}
+
+function splitMarkdownTableRow(line) {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function renderInlineMarkdown(value) {
+  let text = String(value ?? "");
+  const tokens = [];
+  const remember = (html) => {
+    tokens.push(html);
+    return `\u0000${tokens.length - 1}\u0000`;
+  };
+
+  text = text.replace(/`([^`\n]+)`/g, (_, code) => remember(`<code>${escapeHtml(code)}</code>`));
+  text = text.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (match, label, url) => {
+    const safeUrl = safeMarkdownUrl(url);
+    if (!safeUrl) return match;
+    return remember(
+      `<a href="${escapeAttribute(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+    );
+  });
+
+  let html = escapeHtml(text);
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
+  html = html.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+  html = html.replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  html = html.replace(/\u0000(\d+)\u0000/g, (_, tokenIndex) => tokens[Number(tokenIndex)] || "");
+  return html;
+}
+
+function safeMarkdownUrl(value) {
+  try {
+    const url = new URL(String(value), window.location.origin);
+    if (!["http:", "https:", "mailto:"].includes(url.protocol)) return "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replaceAll("`", "&#096;");
 }
 
 function bubbleKind(message) {
