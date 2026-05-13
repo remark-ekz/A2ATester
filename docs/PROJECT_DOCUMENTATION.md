@@ -662,9 +662,12 @@ POST /api/settings/chat-list-limit
 POST /api/profiles
 GET /api/profiles/{profile_id}
 PUT /api/profiles/{profile_id}
+DELETE /api/profiles/{profile_id}
 ```
 
-Создание, получение и обновление подключения.
+Создание, получение, обновление и удаление подключения.
+
+При удалении profile база каскадно удаляет его conversations, messages, artifacts и diagnostics. Если удалено последнее подключение, приложение создает новый локальный profile, чтобы UI оставался в рабочем состоянии. Импортированные копии сертификатов из `data/certificates/profile_{profile_id}` также удаляются.
 
 ### Certificate upload
 

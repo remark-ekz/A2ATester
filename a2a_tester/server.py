@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import socket
 import sys
 import threading
@@ -12,7 +13,8 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import uvicorn
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -135,6 +137,24 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         )
         return {"profile": profile_payload(db.get_profile(profile_id)), "profiles": profile_list(db)}
 
+    @app.delete("/api/profiles/{profile_id}")
+    async def delete_profile(profile_id: int) -> dict[str, Any]:
+        db.get_profile(profile_id)
+        db.delete_profile(profile_id)
+        shutil.rmtree(data_dir / "certificates" / f"profile_{profile_id}", ignore_errors=True)
+        profile = ensure_profile(db)
+        conversation_id = ensure_conversation(db, profile.id)
+        return {
+            "profiles": profile_list(db),
+            "selectedProfileId": profile.id,
+            "conversations": conversation_list(db, profile.id),
+            "selectedConversationId": conversation_id,
+            "profile": profile_payload(profile),
+            "conversation": conversation_payload(db, conversation_id),
+            "chatListLimit": chat_list_limit(db, profile.id),
+            "status": "Соединение удалено",
+        }
+
     @app.post("/api/profiles/{profile_id}/certificates/{field_name}")
     async def upload_certificate(profile_id: int, field_name: str, file: UploadFile = File(...)) -> dict[str, Any]:
         if field_name not in {"ca_bundle_path", "client_cert_path", "client_key_path"}:
@@ -208,7 +228,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         }
 
     @app.post("/api/messages/send")
-    async def send_message(payload: dict[str, Any]) -> dict[str, Any]:
+    async def send_message(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
         profile_id, conversation_id, text = request_ids_and_text(payload)
         profile = db.get_profile(profile_id)
         conversation = ensure_conversation_context(db, conversation_id)
@@ -220,8 +240,17 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             metadata=parse_metadata(profile.metadata_json),
         )
         db.add_message(conversation_id=conversation_id, role="user", kind="message", text=text, raw_json=request_json["params"]["message"])
-        exchange = post_json_rpc(profile_config(profile, endpoint=operation_endpoint(profile, "message_send", profile.endpoint)), request_json)
+        exchange = await run_in_threadpool(
+            post_json_rpc,
+            profile_config(profile, endpoint=operation_endpoint(profile, "message_send", profile.endpoint)),
+            request_json,
+        )
+        if await request.is_disconnected():
+            return refreshed(db, profile_id, conversation_id, "Вызов остановлен пользователем")
         persist_exchange(db, conversation_id, profile_id, exchange, "message/send")
+        if exchange.error:
+            db.add_message(conversation_id=conversation_id, role="system", kind="error", text=exchange.error, raw_json={})
+            return refreshed(db, profile_id, conversation_id, f"Ошибка запроса: {exchange.error}")
         if exchange.response_json:
             persist_payload(db, conversation_id, exchange.response_json)
         return refreshed(db, profile_id, conversation_id, status_after_send(db, conversation_id, "Запрос выполнен"))
@@ -287,7 +316,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         return StreamingResponse(events(), media_type="text/event-stream")
 
     @app.post("/api/tasks/{method_name}")
-    async def task_request(method_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def task_request(method_name: str, request: Request, payload: dict[str, Any]) -> dict[str, Any]:
         method_map = {"get": "tasks/get", "cancel": "tasks/cancel"}
         method = method_map.get(method_name)
         if not method:
@@ -300,20 +329,32 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         profile = db.get_profile(profile_id)
         request_json = build_task_request(method=method, task_id=task_id)
         route_key = "tasks_get" if method == "tasks/get" else "tasks_cancel"
-        exchange = post_json_rpc(profile_config(profile, endpoint=operation_endpoint(profile, route_key, profile.endpoint)), request_json)
+        exchange = await run_in_threadpool(
+            post_json_rpc,
+            profile_config(profile, endpoint=operation_endpoint(profile, route_key, profile.endpoint)),
+            request_json,
+        )
+        if await request.is_disconnected():
+            return refreshed(db, profile_id, conversation_id, "Вызов остановлен пользователем")
         persist_exchange(db, conversation_id, profile_id, exchange, method)
-        status = "tasks/get выполнен" if method == "tasks/get" else "tasks/cancel выполнен"
+        status = ("tasks/get выполнен" if method == "tasks/get" else "tasks/cancel выполнен") if not exchange.error else f"Ошибка запроса: {exchange.error}"
         payload = refreshed(db, profile_id, conversation_id, status)
         payload["taskResult"] = exchange.response_json if not exchange.error else {"error": exchange.error}
         return payload
 
     @app.post("/api/agent-card")
-    async def agent_card(payload: dict[str, Any]) -> dict[str, Any]:
+    async def agent_card(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
         profile_id = int(payload.get("profileId") or 0)
         conversation_id = int(payload.get("conversationId") or 0)
         profile = db.get_profile(profile_id)
         agent_card_url = operation_endpoint(profile, "agent_card", derive_agent_card_url(profile.endpoint))
-        exchange = fetch_agent_card(profile_config(profile, endpoint=agent_card_url), url=agent_card_url)
+        exchange = await run_in_threadpool(fetch_agent_card, profile_config(profile, endpoint=agent_card_url), url=agent_card_url)
+        if await request.is_disconnected():
+            return {
+                "agentCard": {},
+                "conversation": conversation_payload(db, conversation_id) if conversation_id else None,
+                "status": "Вызов остановлен пользователем",
+            }
         persist_exchange(db, conversation_id, profile_id, exchange, "agent-card")
         return {
             "agentCard": exchange.response_json if not exchange.error else {"error": exchange.error},
@@ -905,9 +946,9 @@ def new_context_id() -> str:
 
 def palettes() -> list[dict[str, str]]:
     return [
-        {"key": "studio", "name": "Студия"},
-        {"key": "graphite", "name": "Графит"},
-        {"key": "harbor", "name": "Гавань"},
+        {"key": "studio", "name": "Светлое стекло"},
+        {"key": "graphite", "name": "Темное стекло"},
+        {"key": "harbor", "name": "Глубокая гавань"},
     ]
 
 

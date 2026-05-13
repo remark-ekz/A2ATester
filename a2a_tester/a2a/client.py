@@ -85,12 +85,42 @@ def _headers(config: A2ARequestConfig, *, stream: bool = False) -> dict[str, str
     return headers
 
 
+def _timeout(config: A2ARequestConfig) -> httpx.Timeout:
+    request_timeout = max(1.0, float(config.timeout_seconds or 60))
+    return httpx.Timeout(
+        request_timeout,
+        connect=min(5.0, request_timeout),
+        read=request_timeout,
+        write=min(10.0, request_timeout),
+        pool=min(5.0, request_timeout),
+    )
+
+
+def _network_error(exc: Exception, config: A2ARequestConfig) -> str:
+    request_timeout = max(1.0, float(config.timeout_seconds or 60))
+    connect_timeout = min(5.0, request_timeout)
+    if isinstance(exc, httpx.ConnectTimeout):
+        return f"Таймаут подключения {connect_timeout:.0f}s: {config.endpoint}"
+    if isinstance(exc, httpx.ReadTimeout):
+        return f"Таймаут ответа {request_timeout:.0f}s: {config.endpoint}"
+    if isinstance(exc, httpx.WriteTimeout):
+        return f"Таймаут отправки {min(10.0, request_timeout):.0f}s: {config.endpoint}"
+    if isinstance(exc, httpx.PoolTimeout):
+        return f"Таймаут ожидания HTTP-клиента {min(5.0, request_timeout):.0f}s"
+    if isinstance(exc, httpx.ConnectError):
+        return f"Ошибка подключения к {config.endpoint}: {exc}"
+    if isinstance(exc, httpx.TimeoutException):
+        return f"Таймаут запроса {request_timeout:.0f}s: {config.endpoint}"
+    return str(exc)
+
+
 def post_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> HttpExchange:
     started = time.perf_counter()
     try:
         with httpx.Client(
             verify=_verify_value(config),
-            timeout=config.timeout_seconds,
+            timeout=_timeout(config),
+            trust_env=False,
         ) as client:
             response = client.post(config.endpoint, json=request_json, headers=_headers(config))
             elapsed = (time.perf_counter() - started) * 1000
@@ -117,7 +147,7 @@ def post_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> Htt
             response_headers={},
             status_code=None,
             latency_ms=elapsed,
-            error=str(exc),
+            error=_network_error(exc, config),
             request_url=config.endpoint,
             request_method="POST",
         )
@@ -125,37 +155,41 @@ def post_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> Htt
 
 def stream_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> Iterator[dict[str, Any]]:
     started = time.perf_counter()
-    with httpx.Client(
-        verify=_verify_value(config),
-        timeout=httpx.Timeout(config.timeout_seconds, read=None),
-    ) as client:
-        with client.stream(
-            "POST",
-            config.endpoint,
-            json=request_json,
-            headers=_headers(config, stream=True),
-        ) as response:
-            elapsed = (time.perf_counter() - started) * 1000
-            yield {
-                "type": "headers",
-                "method": "POST",
-                "url": config.endpoint,
-                "status_code": response.status_code,
-                "headers": dict(response.headers),
-                "latency_ms": elapsed,
-            }
-            response.raise_for_status()
-            for event in parse_sse_lines(response.iter_lines()):
-                raw_data = event.get("data", "")
-                try:
-                    payload = json.loads(raw_data)
-                except json.JSONDecodeError:
-                    payload = {"raw": raw_data}
+    try:
+        with httpx.Client(
+            verify=_verify_value(config),
+            timeout=_timeout(config),
+            trust_env=False,
+        ) as client:
+            with client.stream(
+                "POST",
+                config.endpoint,
+                json=request_json,
+                headers=_headers(config, stream=True),
+            ) as response:
+                elapsed = (time.perf_counter() - started) * 1000
                 yield {
-                    "type": "event",
-                    "event": event,
-                    "payload": payload,
+                    "type": "headers",
+                    "method": "POST",
+                    "url": config.endpoint,
+                    "status_code": response.status_code,
+                    "headers": dict(response.headers),
+                    "latency_ms": elapsed,
                 }
+                response.raise_for_status()
+                for event in parse_sse_lines(response.iter_lines()):
+                    raw_data = event.get("data", "")
+                    try:
+                        payload = json.loads(raw_data)
+                    except json.JSONDecodeError:
+                        payload = {"raw": raw_data}
+                    yield {
+                        "type": "event",
+                        "event": event,
+                        "payload": payload,
+                    }
+    except Exception as exc:
+        raise RuntimeError(_network_error(exc, config)) from exc
 
 
 def derive_agent_card_url(endpoint: str) -> str:
@@ -172,7 +206,8 @@ def fetch_agent_card(config: A2ARequestConfig, *, url: str | None = None) -> Htt
     try:
         with httpx.Client(
             verify=_verify_value(config),
-            timeout=config.timeout_seconds,
+            timeout=_timeout(config),
+            trust_env=False,
         ) as client:
             response = client.get(url, headers=config.headers)
             elapsed = (time.perf_counter() - started) * 1000
@@ -198,7 +233,7 @@ def fetch_agent_card(config: A2ARequestConfig, *, url: str | None = None) -> Htt
             response_headers={},
             status_code=None,
             latency_ms=elapsed,
-            error=str(exc),
+            error=_network_error(exc, config),
             request_url=url,
             request_method="GET",
         )

@@ -12,6 +12,7 @@ const state = {
   busyLabel: "",
   busyStartedAt: 0,
   busyTimer: null,
+  currentAbortController: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -22,6 +23,7 @@ const els = {
   paletteSelect: $("paletteSelect"),
   chatListLimit: $("chatListLimit"),
   chatList: $("chatList"),
+  deleteProfile: $("deleteProfileBtn"),
   profileName: $("profileName"),
   endpoint: $("endpoint"),
   agentCardRoute: $("agentCardRoute"),
@@ -47,6 +49,7 @@ const els = {
   chatPane: $("chatPane"),
   messageInput: $("messageInput"),
   diagnostics: $("diagnostics"),
+  stopRequest: $("stopRequestBtn"),
 };
 
 async function api(path, options = {}) {
@@ -103,9 +106,11 @@ function localizeStatus(text) {
 function setBusy(busy, label = "Ждем ответ") {
   state.busy = busy;
   document.body.dataset.busy = busy ? "true" : "false";
-  for (const id of ["sendBtn", "streamBtn", "saveProfileBtn", "agentCardBtn", "getTaskBtn", "cancelTaskBtn", "chatListLimit", "addHeaderBtn"]) {
+  for (const id of ["sendBtn", "streamBtn", "saveProfileBtn", "deleteProfileBtn", "agentCardBtn", "getTaskBtn", "cancelTaskBtn", "chatListLimit", "addHeaderBtn"]) {
     $(id).disabled = busy;
   }
+  els.stopRequest.hidden = !busy;
+  els.stopRequest.disabled = !busy;
   for (const button of document.querySelectorAll(".chat-delete, .header-save, .header-delete")) {
     button.disabled = busy;
   }
@@ -114,6 +119,31 @@ function setBusy(busy, label = "Ждем ответ") {
   } else {
     stopBusyTimer();
   }
+}
+
+function beginCancelableRequest(label) {
+  const controller = new AbortController();
+  state.currentAbortController = controller;
+  setBusy(true, label);
+  return controller;
+}
+
+function finishCancelableRequest(controller) {
+  if (state.currentAbortController === controller) {
+    state.currentAbortController = null;
+  }
+  setBusy(false);
+}
+
+function stopCurrentRequest() {
+  if (!state.currentAbortController) return;
+  els.stopRequest.disabled = true;
+  state.currentAbortController.abort();
+  setStatus("Вызов остановлен пользователем");
+}
+
+function isAbortError(error) {
+  return error?.name === "AbortError" || String(error?.message || "").toLowerCase().includes("abort");
 }
 
 function startBusyTimer(label) {
@@ -497,6 +527,23 @@ async function newProfile() {
   setStatus("Соединение создано");
 }
 
+async function deleteProfile() {
+  if (state.busy || !state.selectedProfileId) return;
+  setBusy(true, "Удаляем соединение");
+  try {
+    const data = await api(`/api/profiles/${state.selectedProfileId}`, {
+      method: "DELETE",
+    });
+    clearTaskResult();
+    applyState({ ...state, ...data });
+    setStatus(data.status || "Соединение удалено");
+  } catch (error) {
+    setStatus(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function newChat() {
   const data = await api("/api/conversations", {
     method: "POST",
@@ -557,14 +604,15 @@ async function updateChatListLimit() {
 async function sendMessage(stream = false) {
   const text = els.messageInput.value.trim();
   if (!text) return;
-  setBusy(true, stream ? "Ждем stream-ответ" : "Ждем ответ");
+  const controller = beginCancelableRequest(stream ? "Ждем stream-ответ" : "Ждем ответ");
   try {
     await saveProfile(false);
     if (stream) {
-      await streamRequest(text);
+      await streamRequest(text, controller.signal);
     } else {
       const data = await api("/api/messages/send", {
         method: "POST",
+        signal: controller.signal,
         body: JSON.stringify({
           profileId: state.selectedProfileId,
           conversationId: state.selectedConversationId,
@@ -575,16 +623,17 @@ async function sendMessage(stream = false) {
     }
     els.messageInput.value = "";
   } catch (error) {
-    setStatus(error.message);
+    setStatus(isAbortError(error) ? "Вызов остановлен пользователем" : error.message);
   } finally {
-    setBusy(false);
+    finishCancelableRequest(controller);
   }
 }
 
-async function streamRequest(text) {
+async function streamRequest(text, signal) {
   const response = await fetch("/api/messages/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal,
     body: JSON.stringify({
       profileId: state.selectedProfileId,
       conversationId: state.selectedConversationId,
@@ -622,11 +671,12 @@ function applyConversationUpdate(data) {
 }
 
 async function taskRequest(method) {
-  setBusy(true, method === "get" ? "Получаем задачу" : "Отменяем задачу");
+  const controller = beginCancelableRequest(method === "get" ? "Получаем задачу" : "Отменяем задачу");
   try {
     await saveProfile(false);
     const data = await api(`/api/tasks/${method}`, {
       method: "POST",
+      signal: controller.signal,
       body: JSON.stringify({
         profileId: state.selectedProfileId,
         conversationId: state.selectedConversationId,
@@ -640,18 +690,19 @@ async function taskRequest(method) {
     els.taskResult.textContent = JSON.stringify(data.taskResult || {}, null, 2);
     setStatus(statusWithLatency(data.status || "Готово", state.conversation));
   } catch (error) {
-    setStatus(error.message);
+    setStatus(isAbortError(error) ? "Вызов остановлен пользователем" : error.message);
   } finally {
-    setBusy(false);
+    finishCancelableRequest(controller);
   }
 }
 
 async function loadAgentCard() {
-  setBusy(true, "Загружаем Agent Card");
+  const controller = beginCancelableRequest("Загружаем Agent Card");
   try {
     await saveProfile(false);
     const data = await api("/api/agent-card", {
       method: "POST",
+      signal: controller.signal,
       body: JSON.stringify({
         profileId: state.selectedProfileId,
         conversationId: state.selectedConversationId,
@@ -664,9 +715,9 @@ async function loadAgentCard() {
     }
     setStatus(statusWithLatency(data.status, data.conversation));
   } catch (error) {
-    setStatus(error.message);
+    setStatus(isAbortError(error) ? "Вызов остановлен пользователем" : error.message);
   } finally {
-    setBusy(false);
+    finishCancelableRequest(controller);
   }
 }
 
@@ -712,9 +763,11 @@ async function pickCertificatePath(fieldName, targetInput) {
 function wireEvents() {
   $("newProfileBtn").addEventListener("click", newProfile);
   $("saveProfileBtn").addEventListener("click", () => saveProfile(true).catch((error) => setStatus(error.message)));
+  $("deleteProfileBtn").addEventListener("click", deleteProfile);
   $("newChatBtn").addEventListener("click", newChat);
   $("sendBtn").addEventListener("click", () => sendMessage(false));
   $("streamBtn").addEventListener("click", () => sendMessage(true));
+  $("stopRequestBtn").addEventListener("click", stopCurrentRequest);
   $("agentCardBtn").addEventListener("click", loadAgentCard);
   $("getTaskBtn").addEventListener("click", () => taskRequest("get"));
   $("cancelTaskBtn").addEventListener("click", () => taskRequest("cancel"));

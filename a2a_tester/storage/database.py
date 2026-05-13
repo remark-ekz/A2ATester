@@ -324,6 +324,11 @@ class Database:
                 ),
             )
 
+    def delete_profile(self, profile_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM app_settings WHERE key = ?", (f"chat_list_limit.profile.{profile_id}",))
+            conn.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
+
     def list_conversations(self, profile_id: int | None = None, limit: int | None = None) -> list[Conversation]:
         limit_clause = ""
         params: tuple[Any, ...]
