@@ -24,6 +24,11 @@ const els = {
   chatList: $("chatList"),
   profileName: $("profileName"),
   endpoint: $("endpoint"),
+  agentCardRoute: $("agentCardRoute"),
+  messageSendRoute: $("messageSendRoute"),
+  messageStreamRoute: $("messageStreamRoute"),
+  tasksGetRoute: $("tasksGetRoute"),
+  tasksCancelRoute: $("tasksCancelRoute"),
   protocolVersion: $("protocolVersion"),
   timeoutSeconds: $("timeoutSeconds"),
   tlsVerify: $("tlsVerify"),
@@ -161,6 +166,13 @@ function profileFormPayload() {
   return {
     name: els.profileName.value.trim(),
     endpoint: els.endpoint.value.trim(),
+    routes: {
+      agentCard: els.agentCardRoute.value.trim(),
+      messageSend: els.messageSendRoute.value.trim(),
+      messageStream: els.messageStreamRoute.value.trim(),
+      tasksGet: els.tasksGetRoute.value.trim(),
+      tasksCancel: els.tasksCancelRoute.value.trim(),
+    },
     protocolVersion: els.protocolVersion.value,
     timeoutSeconds: Number(els.timeoutSeconds.value || 60),
     tlsVerify: els.tlsVerify.checked,
@@ -232,6 +244,11 @@ function renderProfileForm() {
   if (!profile) return;
   els.profileName.value = profile.name || "";
   els.endpoint.value = profile.endpoint || "";
+  els.agentCardRoute.value = profile.routes?.agentCard || "";
+  els.messageSendRoute.value = profile.routes?.messageSend || "";
+  els.messageStreamRoute.value = profile.routes?.messageStream || "";
+  els.tasksGetRoute.value = profile.routes?.tasksGet || "";
+  els.tasksCancelRoute.value = profile.routes?.tasksCancel || "";
   els.protocolVersion.value = profile.protocolVersion || "1.0";
   els.timeoutSeconds.value = profile.timeoutSeconds || 60;
   els.tlsVerify.checked = Boolean(profile.tlsVerify);
@@ -728,6 +745,11 @@ function wireProfileDraftEvents() {
   for (const element of [
     els.profileName,
     els.endpoint,
+    els.agentCardRoute,
+    els.messageSendRoute,
+    els.messageStreamRoute,
+    els.tasksGetRoute,
+    els.tasksCancelRoute,
     els.timeoutSeconds,
     els.caBundlePath,
     els.clientCertPath,

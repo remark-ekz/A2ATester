@@ -33,6 +33,7 @@ class Profile:
     name: str
     endpoint: str
     headers_json: str
+    routes_json: str
     metadata_json: str
     tls_verify: bool
     ca_bundle_path: str
@@ -48,6 +49,7 @@ class Profile:
             name=row["name"],
             endpoint=row["endpoint"],
             headers_json=row["headers_json"] or "{}",
+            routes_json=row["routes_json"] or "{}",
             metadata_json=row["metadata_json"] or "{}",
             tls_verify=bool(row["tls_verify"]),
             ca_bundle_path=row["ca_bundle_path"] or "",
@@ -116,6 +118,9 @@ class Database:
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
         if version < 1:
             self._migrate_v1()
+            version = 1
+        if version < 2:
+            self._migrate_v2()
 
     def _migrate_v1(self) -> None:
         with self.transaction() as conn:
@@ -131,6 +136,7 @@ class Database:
                     name TEXT NOT NULL,
                     endpoint TEXT NOT NULL DEFAULT '',
                     headers_json TEXT NOT NULL DEFAULT '{}',
+                    routes_json TEXT NOT NULL DEFAULT '{}',
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     tls_verify INTEGER NOT NULL DEFAULT 1,
                     ca_bundle_path TEXT NOT NULL DEFAULT '',
@@ -204,6 +210,13 @@ class Database:
                 """
             )
 
+    def _migrate_v2(self) -> None:
+        with self.transaction() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()}
+            if "routes_json" not in columns:
+                conn.execute("ALTER TABLE profiles ADD COLUMN routes_json TEXT NOT NULL DEFAULT '{}'")
+            conn.execute("PRAGMA user_version = 2")
+
     def ensure_default_profile(self) -> None:
         existing = self.db.execute("SELECT id FROM profiles LIMIT 1").fetchone()
         if existing:
@@ -252,11 +265,11 @@ class Database:
             cur = conn.execute(
                 """
                 INSERT INTO profiles(
-                    name, endpoint, headers_json, metadata_json, created_at, updated_at
+                    name, endpoint, headers_json, routes_json, metadata_json, created_at, updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
                 """,
-                (name, endpoint, dumps(headers), dumps(metadata), timestamp, timestamp),
+                (name, endpoint, dumps(headers), "{}", dumps(metadata), timestamp, timestamp),
             )
         return int(cur.lastrowid)
 
@@ -267,6 +280,7 @@ class Database:
         name: str,
         endpoint: str,
         headers_json: str,
+        routes_json: str,
         metadata_json: str,
         tls_verify: bool,
         ca_bundle_path: str,
@@ -282,6 +296,7 @@ class Database:
                 SET name = ?,
                     endpoint = ?,
                     headers_json = ?,
+                    routes_json = ?,
                     metadata_json = ?,
                     tls_verify = ?,
                     ca_bundle_path = ?,
@@ -296,6 +311,7 @@ class Database:
                     name,
                     endpoint,
                     headers_json,
+                    routes_json,
                     metadata_json,
                     int(tls_verify),
                     ca_bundle_path,

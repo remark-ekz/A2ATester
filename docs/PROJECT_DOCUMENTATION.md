@@ -228,6 +228,7 @@ SQLite создаётся в `a2a_tester/storage/database.py`.
 | `name` | имя подключения |
 | `endpoint` | A2A endpoint |
 | `headers_json` | headers в JSON |
+| `routes_json` | точные ручки для Agent Card, message и task requests |
 | `metadata_json` | metadata, добавляемая в JSON-RPC params |
 | `tls_verify` | проверять TLS-сертификат сервера |
 | `ca_bundle_path` | путь к CA bundle |
@@ -476,6 +477,31 @@ Transport автоматически добавляет:
 - `Accept: text/event-stream` для stream-запроса.
 
 Если пользователь явно указал эти headers, его значение сохраняется.
+
+## Ручки запросов
+
+Точные URL для операций хранятся в `profiles.routes_json`.
+
+Поддерживаемые ключи:
+
+```json
+{
+  "agent_card": "/.well-known/agent-card.json",
+  "message_send": "/a2a",
+  "message_stream": "/a2a",
+  "tasks_get": "/a2a",
+  "tasks_cancel": "/a2a"
+}
+```
+
+Пустое значение означает дефолт:
+
+- `message/send`, `message/stream`, `tasks/get`, `tasks/cancel` отправляются на основной `profiles.endpoint`;
+- Agent Card запрашивается с `/.well-known/agent-card.json` от host основного endpoint.
+
+Если значение начинается с `http://` или `https://`, оно используется как полный URL. Если начинается с `/`, путь приклеивается к origin основного endpoint. Если указан относительный путь, он приклеивается к основному endpoint как дочерний путь.
+
+В diagnostics для POST-запросов сохраняется не только JSON-RPC body, но и фактический HTTP method/url, чтобы можно было сверять поведение с Insomnia/Postman.
 
 ## Metadata
 

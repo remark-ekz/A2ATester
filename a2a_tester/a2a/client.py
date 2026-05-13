@@ -32,6 +32,8 @@ class HttpExchange:
     status_code: int | None
     latency_ms: float | None
     error: str = ""
+    request_url: str = ""
+    request_method: str = "POST"
 
 
 def _uses_tls(endpoint: str) -> bool:
@@ -104,6 +106,8 @@ def post_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> Htt
                 status_code=response.status_code,
                 latency_ms=elapsed,
                 error="" if response.is_success else response.text[:2000],
+                request_url=config.endpoint,
+                request_method="POST",
             )
     except Exception as exc:
         elapsed = (time.perf_counter() - started) * 1000
@@ -114,6 +118,8 @@ def post_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> Htt
             status_code=None,
             latency_ms=elapsed,
             error=str(exc),
+            request_url=config.endpoint,
+            request_method="POST",
         )
 
 
@@ -132,6 +138,8 @@ def stream_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> I
             elapsed = (time.perf_counter() - started) * 1000
             yield {
                 "type": "headers",
+                "method": "POST",
+                "url": config.endpoint,
                 "status_code": response.status_code,
                 "headers": dict(response.headers),
                 "latency_ms": elapsed,
@@ -157,8 +165,8 @@ def derive_agent_card_url(endpoint: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, "/.well-known/agent-card.json", "", "", ""))
 
 
-def fetch_agent_card(config: A2ARequestConfig) -> HttpExchange:
-    url = derive_agent_card_url(config.endpoint)
+def fetch_agent_card(config: A2ARequestConfig, *, url: str | None = None) -> HttpExchange:
+    url = url or derive_agent_card_url(config.endpoint)
     request_json = {"method": "GET", "url": url}
     started = time.perf_counter()
     try:
@@ -179,6 +187,8 @@ def fetch_agent_card(config: A2ARequestConfig) -> HttpExchange:
                 status_code=response.status_code,
                 latency_ms=elapsed,
                 error="" if response.is_success else response.text[:2000],
+                request_url=url,
+                request_method="GET",
             )
     except Exception as exc:
         elapsed = (time.perf_counter() - started) * 1000
@@ -189,4 +199,6 @@ def fetch_agent_card(config: A2ARequestConfig) -> HttpExchange:
             status_code=None,
             latency_ms=elapsed,
             error=str(exc),
+            request_url=url,
+            request_method="GET",
         )

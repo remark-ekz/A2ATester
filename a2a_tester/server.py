@@ -9,13 +9,14 @@ import time
 import webbrowser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from a2a_tester.a2a.client import A2ARequestConfig, HttpExchange, fetch_agent_card, post_json_rpc, stream_json_rpc
+from a2a_tester.a2a.client import A2ARequestConfig, HttpExchange, derive_agent_card_url, fetch_agent_card, post_json_rpc, stream_json_rpc
 from a2a_tester.a2a.jsonrpc import build_message_request, build_task_request
 from a2a_tester.a2a.render import RenderItem, extract_context_id, extract_render_items, pretty_json
 from a2a_tester.storage.database import Database, Profile, loads
@@ -27,6 +28,7 @@ CERTIFICATE_UPLOAD_LIMIT_BYTES = 2 * 1024 * 1024
 DEFAULT_CHAT_LIST_LIMIT = 20
 MIN_CHAT_LIST_LIMIT = 1
 MAX_CHAT_LIST_LIMIT = 200
+ROUTE_KEYS = {"agent_card", "message_send", "message_stream", "tasks_get", "tasks_cancel"}
 
 
 def frontend_dir() -> Path:
@@ -122,6 +124,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             name=str(payload.get("name") or profile.name),
             endpoint=str(payload.get("endpoint") or ""),
             headers_json=pretty_json(headers_to_storage(payload.get("headers") or [])),
+            routes_json=pretty_json(routes_to_storage(payload.get("routes") or {})),
             metadata_json=pretty_json(metadata),
             tls_verify=bool(payload.get("tlsVerify", True)),
             ca_bundle_path=ca_bundle_path,
@@ -157,6 +160,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             name=profile.name,
             endpoint=profile.endpoint,
             headers_json=profile.headers_json,
+            routes_json=profile.routes_json,
             metadata_json=profile.metadata_json,
             tls_verify=profile.tls_verify,
             ca_bundle_path=values["ca_bundle_path"],
@@ -216,7 +220,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             metadata=parse_metadata(profile.metadata_json),
         )
         db.add_message(conversation_id=conversation_id, role="user", kind="message", text=text, raw_json=request_json["params"]["message"])
-        exchange = post_json_rpc(profile_config(profile), request_json)
+        exchange = post_json_rpc(profile_config(profile, endpoint=operation_endpoint(profile, "message_send", profile.endpoint)), request_json)
         persist_exchange(db, conversation_id, profile_id, exchange, "message/send")
         if exchange.response_json:
             persist_payload(db, conversation_id, exchange.response_json)
@@ -235,18 +239,19 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             metadata=parse_metadata(profile.metadata_json),
         )
         db.add_message(conversation_id=conversation_id, role="user", kind="message", text=text, raw_json=request_json["params"]["message"])
+        stream_endpoint = operation_endpoint(profile, "message_stream", profile.endpoint)
 
         def events():
             yield sse({"type": "state", **refreshed(db, profile_id, conversation_id, "Stream идет...")})
             try:
-                for item in stream_json_rpc(profile_config(profile), request_json):
+                for item in stream_json_rpc(profile_config(profile, endpoint=stream_endpoint), request_json):
                     if item.get("type") == "headers":
                         db.add_http_event(
                             conversation_id=conversation_id,
                             profile_id=profile_id,
                             jsonrpc_id=str(request_json.get("id", "")),
                             method="message/stream",
-                            request_json=request_json,
+                            request_json=diagnostic_request(request_json, item.get("url", stream_endpoint), item.get("method", "POST")),
                             response_json={"stream": "opened"},
                             response_headers_json=item.get("headers", {}),
                             status_code=item.get("status_code"),
@@ -271,7 +276,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
                     profile_id=profile_id,
                     jsonrpc_id=str(request_json.get("id", "")),
                     method="message/stream",
-                    request_json=request_json,
+                    request_json=diagnostic_request(request_json, stream_endpoint, "POST"),
                     error=str(exc),
                 )
                 db.add_message(conversation_id=conversation_id, role="system", kind="error", text=str(exc), raw_json={})
@@ -294,7 +299,8 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             raise HTTPException(status_code=400, detail="taskId is required")
         profile = db.get_profile(profile_id)
         request_json = build_task_request(method=method, task_id=task_id)
-        exchange = post_json_rpc(profile_config(profile), request_json)
+        route_key = "tasks_get" if method == "tasks/get" else "tasks_cancel"
+        exchange = post_json_rpc(profile_config(profile, endpoint=operation_endpoint(profile, route_key, profile.endpoint)), request_json)
         persist_exchange(db, conversation_id, profile_id, exchange, method)
         if exchange.response_json:
             persist_payload(db, conversation_id, exchange.response_json)
@@ -306,7 +312,8 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         profile_id = int(payload.get("profileId") or 0)
         conversation_id = int(payload.get("conversationId") or 0)
         profile = db.get_profile(profile_id)
-        exchange = fetch_agent_card(profile_config(profile))
+        agent_card_url = operation_endpoint(profile, "agent_card", derive_agent_card_url(profile.endpoint))
+        exchange = fetch_agent_card(profile_config(profile, endpoint=agent_card_url), url=agent_card_url)
         persist_exchange(db, conversation_id, profile_id, exchange, "agent-card")
         return {
             "agentCard": exchange.response_json if not exchange.error else {"error": exchange.error},
@@ -457,6 +464,7 @@ def profile_payload(profile: Profile) -> dict[str, Any]:
         "name": profile.name,
         "endpoint": profile.endpoint,
         "headers": headers_records(loads(profile.headers_json, {})),
+        "routes": routes_payload(loads(profile.routes_json, {})),
         "metadataJson": profile.metadata_json,
         "tlsVerify": profile.tls_verify,
         "caBundlePath": profile.ca_bundle_path,
@@ -566,9 +574,9 @@ def refreshed(db: Database, profile_id: int, conversation_id: int, status: str) 
     }
 
 
-def profile_config(profile: Profile) -> A2ARequestConfig:
+def profile_config(profile: Profile, *, endpoint: str | None = None) -> A2ARequestConfig:
     return A2ARequestConfig(
-        endpoint=profile.endpoint,
+        endpoint=endpoint or profile.endpoint,
         headers=active_headers(loads(profile.headers_json, {})),
         tls_verify=profile.tls_verify,
         ca_bundle_path=profile.ca_bundle_path,
@@ -596,7 +604,7 @@ def persist_exchange(db: Database, conversation_id: int | None, profile_id: int 
         profile_id=profile_id,
         jsonrpc_id=request_id,
         method=method,
-        request_json=exchange.request_json,
+        request_json=diagnostic_request(exchange.request_json, exchange.request_url, exchange.request_method),
         response_json=exchange.response_json,
         response_headers_json=redact_headers(exchange.response_headers),
         status_code=exchange.status_code,
@@ -689,6 +697,78 @@ def headers_to_storage(records: Any) -> dict[str, dict[str, Any]]:
 
 def active_headers(records: Any) -> dict[str, str]:
     return {record["name"]: str(record.get("value") or "") for record in headers_records(records) if bool(record.get("enabled", True))}
+
+
+def routes_payload(routes: Any) -> dict[str, str]:
+    storage = routes_to_storage(routes)
+    return {
+        "agentCard": storage.get("agent_card", ""),
+        "messageSend": storage.get("message_send", ""),
+        "messageStream": storage.get("message_stream", ""),
+        "tasksGet": storage.get("tasks_get", ""),
+        "tasksCancel": storage.get("tasks_cancel", ""),
+    }
+
+
+def routes_to_storage(routes: Any) -> dict[str, str]:
+    if not isinstance(routes, dict):
+        return {}
+
+    aliases = {
+        "agent_card": "agent_card",
+        "agentCard": "agent_card",
+        "message_send": "message_send",
+        "messageSend": "message_send",
+        "message_stream": "message_stream",
+        "messageStream": "message_stream",
+        "tasks_get": "tasks_get",
+        "tasksGet": "tasks_get",
+        "tasks_cancel": "tasks_cancel",
+        "tasksCancel": "tasks_cancel",
+    }
+    normalized: dict[str, str] = {}
+    for key, value in routes.items():
+        storage_key = aliases.get(str(key))
+        if storage_key in ROUTE_KEYS:
+            normalized[storage_key] = str(value or "").strip()
+    return {key: value for key, value in normalized.items() if value}
+
+
+def operation_endpoint(profile: Profile, route_key: str, default_url: str) -> str:
+    route = routes_to_storage(loads(profile.routes_json, {})).get(route_key, "")
+    return resolve_route_url(profile.endpoint, route, default_url)
+
+
+def resolve_route_url(base_endpoint: str, route: str, default_url: str) -> str:
+    route = str(route or "").strip()
+    if not route:
+        return default_url
+
+    parsed_route = urlparse(route)
+    if parsed_route.scheme and parsed_route.netloc:
+        return route
+
+    base = str(base_endpoint or "").strip()
+    parsed_base = urlparse(base)
+    if not parsed_base.scheme or not parsed_base.netloc:
+        return route
+
+    if route.startswith("/"):
+        origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+        return urljoin(origin, route)
+    return urljoin(base.rstrip("/") + "/", route)
+
+
+def diagnostic_request(body: dict[str, Any], url: str = "", method: str = "POST") -> dict[str, Any]:
+    if not url:
+        return body
+    if body.get("method") == method and body.get("url") == url:
+        return body
+    return {
+        "method": method or "POST",
+        "url": url,
+        "body": body,
+    }
 
 
 def parse_metadata(value: Any) -> dict[str, Any]:
