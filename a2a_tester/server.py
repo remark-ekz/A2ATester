@@ -302,10 +302,10 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         route_key = "tasks_get" if method == "tasks/get" else "tasks_cancel"
         exchange = post_json_rpc(profile_config(profile, endpoint=operation_endpoint(profile, route_key, profile.endpoint)), request_json)
         persist_exchange(db, conversation_id, profile_id, exchange, method)
-        if exchange.response_json:
-            persist_payload(db, conversation_id, exchange.response_json)
         status = "tasks/get выполнен" if method == "tasks/get" else "tasks/cancel выполнен"
-        return refreshed(db, profile_id, conversation_id, status)
+        payload = refreshed(db, profile_id, conversation_id, status)
+        payload["taskResult"] = exchange.response_json if not exchange.error else {"error": exchange.error}
+        return payload
 
     @app.post("/api/agent-card")
     async def agent_card(payload: dict[str, Any]) -> dict[str, Any]:

@@ -40,6 +40,7 @@ const els = {
   clientKeyFile: $("clientKeyFile"),
   metadataJson: $("metadataJson"),
   taskId: $("taskId"),
+  taskResult: $("taskResult"),
   agentCard: $("agentCard"),
   headerRows: $("headerRows"),
   conversationMeta: $("conversationMeta"),
@@ -286,6 +287,12 @@ function renderConversations() {
   }
 }
 
+function clearTaskResult() {
+  if (els.taskResult) {
+    els.taskResult.textContent = "";
+  }
+}
+
 function renderConversation() {
   const conversation = state.conversation;
   if (!conversation) {
@@ -466,6 +473,7 @@ async function selectProfile(profileId) {
   state.selectedConversationId = data.selectedConversationId;
   state.conversation = data.conversation;
   state.chatListLimit = data.chatListLimit || state.chatListLimit;
+  clearTaskResult();
   renderAll();
   setStatus("Соединение загружено");
 }
@@ -474,6 +482,7 @@ async function selectConversation(conversationId) {
   const data = await api(`/api/conversations/${conversationId}`);
   state.selectedConversationId = Number(conversationId);
   state.conversation = data.conversation;
+  clearTaskResult();
   renderConversations();
   renderConversation();
   setStatus(state.conversation.inputRequired ? "Требуется ввод" : "Чат загружен");
@@ -496,6 +505,7 @@ async function newChat() {
   state.conversations = data.conversations;
   state.selectedConversationId = data.selectedConversationId;
   state.conversation = data.conversation;
+  clearTaskResult();
   renderConversations();
   renderConversation();
   setStatus("Новый чат создан");
@@ -512,6 +522,7 @@ async function deleteConversation(conversationId) {
     state.conversations = data.conversations;
     state.selectedConversationId = data.selectedConversationId;
     state.conversation = data.conversation;
+    clearTaskResult();
     renderConversations();
     renderConversation();
     setStatus(data.status || "Чат удален");
@@ -622,7 +633,12 @@ async function taskRequest(method) {
         taskId: els.taskId.value.trim(),
       }),
     });
-    applyConversationUpdate(data);
+    state.conversations = data.conversations || state.conversations;
+    state.conversation = data.conversation || state.conversation;
+    renderConversations();
+    renderConversation();
+    els.taskResult.textContent = JSON.stringify(data.taskResult || {}, null, 2);
+    setStatus(statusWithLatency(data.status || "Готово", state.conversation));
   } catch (error) {
     setStatus(error.message);
   } finally {
@@ -735,7 +751,11 @@ function wireEvents() {
   els.clientKeyFile.addEventListener("change", () => uploadCert(els.clientKeyFile, "client_key_path", els.clientKeyPath));
   wireProfileDraftEvents();
   els.messageInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    if (!state.busy) {
       sendMessage(false);
     }
   });
