@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -12,33 +12,36 @@
         <div class="brand">
           <div>
             <h1>A2A Tester</h1>
-            <p id="statusText">Starting...</p>
+            <p id="statusText">Запуск...</p>
           </div>
         </div>
 
-        <label class="field-label" for="profileSelect">Connection</label>
+        <label class="field-label" for="profileSelect">Соединение</label>
         <select id="profileSelect"></select>
         <div class="button-row">
-          <button id="newProfileBtn" class="ghost">New</button>
-          <button id="saveProfileBtn" class="primary">Save</button>
+          <button id="newProfileBtn" class="ghost">Новое</button>
+          <button id="saveProfileBtn" class="primary">Сохранить</button>
         </div>
 
-        <label class="field-label" for="paletteSelect">Palette</label>
+        <label class="field-label" for="paletteSelect">Палитра</label>
         <select id="paletteSelect"></select>
 
-        <button id="newChatBtn" class="primary full">New Chat</button>
+        <button id="newChatBtn" class="primary full">Новый чат</button>
 
-        <div class="sidebar-section-title">Chats</div>
+        <label class="field-label" for="chatListLimit">Чатов в списке</label>
+        <input id="chatListLimit" type="number" min="1" max="200" step="1" />
+
+        <div class="sidebar-section-title">Чаты</div>
         <div id="chatList" class="chat-list"></div>
       </aside>
 
       <main class="main">
         <section class="settings-stack">
           <details open>
-            <summary>Connection</summary>
+            <summary>Соединение</summary>
             <div class="settings-grid">
               <label>
-                <span>Name</span>
+                <span>Название</span>
                 <input id="profileName" type="text" />
               </label>
               <label class="wide">
@@ -46,7 +49,7 @@
                 <input id="endpoint" type="url" />
               </label>
               <label>
-                <span>Protocol</span>
+                <span>Протокол</span>
                 <select id="protocolVersion">
                   <option value="1.0">1.0</option>
                   <option value="0.3">0.3</option>
@@ -54,20 +57,20 @@
                 </select>
               </label>
               <label>
-                <span>Timeout seconds</span>
+                <span>Таймаут, секунды</span>
                 <input id="timeoutSeconds" type="number" min="1" step="1" />
               </label>
-              <button id="agentCardBtn" class="ghost align-end">Load Agent Card</button>
+              <button id="agentCardBtn" class="ghost align-end">Загрузить Agent Card</button>
             </div>
             <pre id="agentCard" class="json-panel small"></pre>
           </details>
 
           <details>
-            <summary>Certificates</summary>
+            <summary>Сертификаты</summary>
             <div class="cert-grid">
               <label class="switch-row">
                 <input id="tlsVerify" type="checkbox" />
-                <span>Verify TLS certificates</span>
+                <span>Проверять TLS-сертификаты</span>
               </label>
               <div class="file-row">
                 <label>
@@ -75,8 +78,8 @@
                   <input id="caBundlePath" type="text" />
                 </label>
                 <div class="cert-actions">
-                  <button id="caBundlePickPath" class="ghost" type="button">Pick Path</button>
-                  <button id="caBundleImportBtn" class="ghost" type="button">Import Copy</button>
+                  <button id="caBundlePickPath" class="ghost" type="button">Выбрать путь</button>
+                  <button id="caBundleImportBtn" class="ghost" type="button">Импорт копии</button>
                   <input id="caBundleFile" class="cert-file-input" type="file" accept=".pem,.crt,.cer,.bundle,.chain,.txt" />
                 </div>
               </div>
@@ -86,8 +89,8 @@
                   <input id="clientCertPath" type="text" />
                 </label>
                 <div class="cert-actions">
-                  <button id="clientCertPickPath" class="ghost" type="button">Pick Path</button>
-                  <button id="clientCertImportBtn" class="ghost" type="button">Import Copy</button>
+                  <button id="clientCertPickPath" class="ghost" type="button">Выбрать путь</button>
+                  <button id="clientCertImportBtn" class="ghost" type="button">Импорт копии</button>
                   <input id="clientCertFile" class="cert-file-input" type="file" accept=".pem,.crt,.cer,.bundle,.chain,.txt" />
                 </div>
               </div>
@@ -97,8 +100,8 @@
                   <input id="clientKeyPath" type="text" />
                 </label>
                 <div class="cert-actions">
-                  <button id="clientKeyPickPath" class="ghost" type="button">Pick Path</button>
-                  <button id="clientKeyImportBtn" class="ghost" type="button">Import Copy</button>
+                  <button id="clientKeyPickPath" class="ghost" type="button">Выбрать путь</button>
+                  <button id="clientKeyImportBtn" class="ghost" type="button">Импорт копии</button>
                   <input id="clientKeyFile" class="cert-file-input" type="file" accept=".pem,.key,.txt" />
                 </div>
               </div>
@@ -106,48 +109,34 @@
           </details>
 
           <details>
-            <summary>Headers</summary>
-            <div id="headerCards" class="header-cards"></div>
-            <div class="header-editor">
-              <label>
-                <span>Name</span>
-                <input id="headerName" type="text" placeholder="Authorization" />
-              </label>
-              <label class="wide">
-                <span>Value</span>
-                <input id="headerValue" type="password" placeholder="Bearer ..." />
-              </label>
-              <label class="switch-row">
-                <input id="headerEnabled" type="checkbox" checked />
-                <span>Enabled</span>
-              </label>
-              <label class="switch-row">
-                <input id="headerSecret" type="checkbox" checked />
-                <span>Mask value</span>
-              </label>
-              <div class="button-row align-end">
-                <button id="newHeaderBtn" class="ghost">New Header</button>
-                <button id="deleteHeaderBtn" class="danger">Delete Header</button>
-                <button id="saveHeaderBtn" class="primary">Save Header</button>
+            <summary>Заголовки</summary>
+            <div class="headers-toolbar">
+              <div class="headers-table-head">
+                <span>Вкл</span>
+                <span>Ключ</span>
+                <span>Значение</span>
+                <span></span>
               </div>
+              <button id="addHeaderBtn" class="icon-button" type="button" title="Добавить заголовок">+</button>
             </div>
+            <div id="headerRows" class="header-rows"></div>
           </details>
 
           <details>
-            <summary>Metadata</summary>
+            <summary>Метаданные</summary>
             <textarea id="metadataJson" class="code-input" spellcheck="false"></textarea>
-            <button id="formatMetadataBtn" class="ghost">Format JSON</button>
+            <button id="formatMetadataBtn" class="ghost">Форматировать JSON</button>
           </details>
 
           <details>
-            <summary>Task Tools</summary>
+            <summary>Инструменты задач</summary>
             <div class="task-tools">
               <label class="wide">
                 <span>Task ID</span>
                 <input id="taskId" type="text" />
               </label>
-              <button id="getTaskBtn" class="ghost">Get Task</button>
-              <button id="cancelTaskBtn" class="danger">Cancel Task</button>
+              <button id="getTaskBtn" class="ghost">Получить задачу</button>
+              <button id="cancelTaskBtn" class="danger">Отменить задачу</button>
             </div>
           </details>
         </section>
@@ -156,15 +145,15 @@
         <section class="chat-pane" id="chatPane"></section>
 
         <section class="composer">
-          <textarea id="messageInput" placeholder="Write a message for the agent"></textarea>
+          <textarea id="messageInput" placeholder="Напишите сообщение агенту"></textarea>
           <div class="composer-actions">
-            <button id="sendBtn" class="primary">Send</button>
-            <button id="streamBtn" class="ghost">Stream</button>
+            <button id="sendBtn" class="primary">Отправить</button>
+            <button id="streamBtn" class="ghost">Поток</button>
           </div>
         </section>
 
         <details class="diagnostics-details">
-          <summary>JSON diagnostics</summary>
+          <summary>JSON-диагностика</summary>
           <pre id="diagnostics" class="json-panel diagnostics"></pre>
         </details>
       </main>

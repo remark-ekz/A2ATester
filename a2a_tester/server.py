@@ -24,6 +24,9 @@ from a2a_tester.storage.database import Database, Profile, loads
 SECRET_HEADER_NAMES = {"authorization", "cookie", "x-api-key", "api-key", "proxy-authorization"}
 INPUT_REQUIRED_STATES = {"input-required", "input_required"}
 CERTIFICATE_UPLOAD_LIMIT_BYTES = 2 * 1024 * 1024
+DEFAULT_CHAT_LIST_LIMIT = 20
+MIN_CHAT_LIST_LIMIT = 1
+MAX_CHAT_LIST_LIMIT = 200
 
 
 def frontend_dir() -> Path:
@@ -57,6 +60,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             "conversation": conversation_payload(db, conversation_id),
             "theme": db.get_setting("theme", "studio"),
             "palettes": palettes(),
+            "chatListLimit": chat_list_limit(db, profile.id),
         }
 
     @app.post("/api/settings/theme")
@@ -65,9 +69,21 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         db.set_setting("theme", key)
         return {"theme": key}
 
+    @app.post("/api/settings/chat-list-limit")
+    async def set_chat_list_limit(payload: dict[str, Any]) -> dict[str, Any]:
+        profile_id = int(payload.get("profileId") or 0)
+        if not profile_id:
+            raise HTTPException(status_code=400, detail="profileId is required")
+        limit = normalize_chat_list_limit(payload.get("limit"))
+        db.set_setting(chat_list_limit_key(profile_id), str(limit))
+        return {
+            "chatListLimit": limit,
+            "conversations": conversation_list(db, profile_id),
+        }
+
     @app.post("/api/profiles")
     async def create_profile(payload: dict[str, Any]) -> dict[str, Any]:
-        name = str(payload.get("name") or f"Connection {time.strftime('%Y-%m-%d %H:%M')}")
+        name = str(payload.get("name") or f"Соединение {time.strftime('%Y-%m-%d %H:%M')}")
         profile_id = db.create_profile(name, "http://localhost:8000", {}, {})
         conversation_id = db.create_conversation(profile_id, default_chat_title(), context_id=new_context_id())
         profile = db.get_profile(profile_id)
@@ -78,6 +94,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             "selectedConversationId": conversation_id,
             "profile": profile_payload(profile),
             "conversation": conversation_payload(db, conversation_id),
+            "chatListLimit": chat_list_limit(db, profile_id),
         }
 
     @app.get("/api/profiles/{profile_id}")
@@ -89,6 +106,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             "conversations": conversation_list(db, profile_id),
             "selectedConversationId": conversation_id,
             "conversation": conversation_payload(db, conversation_id),
+            "chatListLimit": chat_list_limit(db, profile_id),
         }
 
     @app.put("/api/profiles/{profile_id}")
@@ -168,6 +186,23 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             db.update_conversation_context(conversation_id, new_context_id())
         return {"conversation": conversation_payload(db, conversation_id)}
 
+    @app.delete("/api/conversations/{conversation_id}")
+    def delete_conversation(conversation_id: int, activeConversationId: int = 0) -> dict[str, Any]:
+        try:
+            deleted = db.get_conversation(conversation_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        profile_id = deleted.profile_id
+        db.delete_conversation(conversation_id)
+        selected_conversation_id = select_conversation_after_delete(db, profile_id, activeConversationId, conversation_id)
+        return {
+            "status": "Чат удален",
+            "conversations": conversation_list(db, profile_id),
+            "selectedConversationId": selected_conversation_id,
+            "conversation": conversation_payload(db, selected_conversation_id),
+        }
+
     @app.post("/api/messages/send")
     async def send_message(payload: dict[str, Any]) -> dict[str, Any]:
         profile_id, conversation_id, text = request_ids_and_text(payload)
@@ -185,7 +220,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         persist_exchange(db, conversation_id, profile_id, exchange, "message/send")
         if exchange.response_json:
             persist_payload(db, conversation_id, exchange.response_json)
-        return refreshed(db, profile_id, conversation_id, status_after_send(db, conversation_id, "Request completed"))
+        return refreshed(db, profile_id, conversation_id, status_after_send(db, conversation_id, "Запрос выполнен"))
 
     @app.post("/api/messages/stream")
     async def stream_message(payload: dict[str, Any]) -> StreamingResponse:
@@ -202,7 +237,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         db.add_message(conversation_id=conversation_id, role="user", kind="message", text=text, raw_json=request_json["params"]["message"])
 
         def events():
-            yield sse({"type": "state", **refreshed(db, profile_id, conversation_id, "Streaming...")})
+            yield sse({"type": "state", **refreshed(db, profile_id, conversation_id, "Stream идет...")})
             try:
                 for item in stream_json_rpc(profile_config(profile), request_json):
                     if item.get("type") == "headers":
@@ -229,7 +264,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
                             response_headers_json={},
                         )
                         persist_payload(db, conversation_id, payload)
-                    yield sse({"type": "state", **refreshed(db, profile_id, conversation_id, "Streaming...")})
+                    yield sse({"type": "state", **refreshed(db, profile_id, conversation_id, "Stream идет...")})
             except Exception as exc:
                 db.add_http_event(
                     conversation_id=conversation_id,
@@ -240,9 +275,9 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
                     error=str(exc),
                 )
                 db.add_message(conversation_id=conversation_id, role="system", kind="error", text=str(exc), raw_json={})
-                yield sse({"type": "state", **refreshed(db, profile_id, conversation_id, f"Stream error: {exc}")})
+                yield sse({"type": "state", **refreshed(db, profile_id, conversation_id, f"Ошибка stream: {exc}")})
                 return
-            yield sse({"type": "state", **refreshed(db, profile_id, conversation_id, status_after_send(db, conversation_id, "Stream completed"))})
+            yield sse({"type": "state", **refreshed(db, profile_id, conversation_id, status_after_send(db, conversation_id, "Stream завершен"))})
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
@@ -263,7 +298,8 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         persist_exchange(db, conversation_id, profile_id, exchange, method)
         if exchange.response_json:
             persist_payload(db, conversation_id, exchange.response_json)
-        return refreshed(db, profile_id, conversation_id, f"{method} completed")
+        status = "tasks/get выполнен" if method == "tasks/get" else "tasks/cancel выполнен"
+        return refreshed(db, profile_id, conversation_id, status)
 
     @app.post("/api/agent-card")
     async def agent_card(payload: dict[str, Any]) -> dict[str, Any]:
@@ -275,7 +311,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         return {
             "agentCard": exchange.response_json if not exchange.error else {"error": exchange.error},
             "conversation": conversation_payload(db, conversation_id) if conversation_id else None,
-            "status": "Agent Card loaded" if not exchange.error else f"Agent Card error: {exchange.error}",
+            "status": "Agent Card загружена" if not exchange.error else f"Ошибка Agent Card: {exchange.error}",
         }
 
     return app
@@ -400,6 +436,21 @@ def ensure_conversation_context(db: Database, conversation_id: int):
     return db.get_conversation(conversation_id)
 
 
+def select_conversation_after_delete(db: Database, profile_id: int, active_conversation_id: int, deleted_conversation_id: int) -> int:
+    if active_conversation_id and active_conversation_id != deleted_conversation_id:
+        try:
+            active = db.get_conversation(active_conversation_id)
+        except KeyError:
+            active = None
+        if active and active.profile_id == profile_id:
+            return active.id
+
+    conversations = db.list_conversations(profile_id)
+    if conversations:
+        return conversations[0].id
+    return db.create_conversation(profile_id, default_chat_title(), context_id=new_context_id())
+
+
 def profile_payload(profile: Profile) -> dict[str, Any]:
     return {
         "id": profile.id,
@@ -420,17 +471,43 @@ def profile_list(db: Database) -> list[dict[str, Any]]:
     return [profile_payload(profile) for profile in db.list_profiles()]
 
 
+def chat_list_limit_key(profile_id: int) -> str:
+    return f"chat_list_limit.profile.{profile_id}"
+
+
+def normalize_chat_list_limit(value: Any) -> int:
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        limit = DEFAULT_CHAT_LIST_LIMIT
+    return max(MIN_CHAT_LIST_LIMIT, min(MAX_CHAT_LIST_LIMIT, limit))
+
+
+def chat_list_limit(db: Database, profile_id: int) -> int:
+    return normalize_chat_list_limit(db.get_setting(chat_list_limit_key(profile_id), str(DEFAULT_CHAT_LIST_LIMIT)))
+
+
+def conversation_preview(db: Database, conversation_id: int) -> str:
+    text = db.first_message_text(conversation_id).strip()
+    if not text:
+        return "Сообщений пока нет"
+    normalized = " ".join(text.split())
+    return normalized[:180]
+
+
 def conversation_list(db: Database, profile_id: int) -> list[dict[str, Any]]:
+    limit = chat_list_limit(db, profile_id)
     return [
         {
             "id": conversation.id,
             "profileId": conversation.profile_id,
             "title": conversation.title,
             "contextId": conversation.context_id,
+            "preview": conversation_preview(db, conversation.id),
             "createdAt": conversation.created_at,
             "updatedAt": conversation.updated_at,
         }
-        for conversation in db.list_conversations(profile_id)
+        for conversation in db.list_conversations(profile_id, limit=limit)
     ]
 
 
@@ -724,7 +801,7 @@ def status_after_send(db: Database, conversation_id: int, fallback: str) -> str:
     if is_input_required(db, conversation_id):
         task_id = latest_task_id(db, conversation_id)
         suffix = f" {task_id}" if task_id else ""
-        return f"Input required for task{suffix}"
+        return f"Требуется ввод для задачи{suffix}"
     return fallback
 
 
@@ -737,7 +814,7 @@ def is_secret_header(name: str) -> bool:
 
 
 def default_chat_title() -> str:
-    return "Chat " + time.strftime("%Y-%m-%d %H:%M")
+    return "Чат " + time.strftime("%Y-%m-%d %H:%M")
 
 
 def new_context_id() -> str:
@@ -748,9 +825,9 @@ def new_context_id() -> str:
 
 def palettes() -> list[dict[str, str]]:
     return [
-        {"key": "studio", "name": "Studio"},
-        {"key": "graphite", "name": "Graphite"},
-        {"key": "harbor", "name": "Harbor"},
+        {"key": "studio", "name": "Студия"},
+        {"key": "graphite", "name": "Графит"},
+        {"key": "harbor", "name": "Гавань"},
     ]
 
 

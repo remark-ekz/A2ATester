@@ -209,7 +209,7 @@ class Database:
         if existing:
             return
         self.create_profile(
-            name="Local agent",
+            name="Локальный агент",
             endpoint="http://localhost:8000",
             headers={},
             metadata={},
@@ -308,23 +308,36 @@ class Database:
                 ),
             )
 
-    def list_conversations(self, profile_id: int | None = None) -> list[Conversation]:
+    def list_conversations(self, profile_id: int | None = None, limit: int | None = None) -> list[Conversation]:
+        limit_clause = ""
+        params: tuple[Any, ...]
+        if limit is not None and limit > 0:
+            limit_clause = "LIMIT ?"
+            limit_param: tuple[Any, ...] = (limit,)
+        else:
+            limit_param = ()
+
         if profile_id:
+            params = (profile_id, *limit_param)
             rows = self.db.execute(
-                """
+                f"""
                 SELECT * FROM conversations
                 WHERE archived = 0 AND profile_id = ?
                 ORDER BY updated_at DESC, id DESC
+                {limit_clause}
                 """,
-                (profile_id,),
+                params,
             ).fetchall()
         else:
+            params = limit_param
             rows = self.db.execute(
-                """
+                f"""
                 SELECT * FROM conversations
                 WHERE archived = 0
                 ORDER BY updated_at DESC, id DESC
-                """
+                {limit_clause}
+                """,
+                params,
             ).fetchall()
         return [Conversation.from_row(row) for row in rows]
 
@@ -345,6 +358,10 @@ class Database:
                 (profile_id, title, context_id, timestamp, timestamp),
             )
         return int(cur.lastrowid)
+
+    def delete_conversation(self, conversation_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
 
     def update_conversation_context(self, conversation_id: int, context_id: str) -> None:
         if not context_id:
@@ -407,6 +424,32 @@ class Database:
             """,
             (conversation_id,),
         ).fetchall()
+
+    def first_message_text(self, conversation_id: int) -> str:
+        row = self.db.execute(
+            """
+            SELECT text FROM messages
+            WHERE conversation_id = ?
+              AND role = 'user'
+              AND kind = 'message'
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (conversation_id,),
+        ).fetchone()
+        if row and row["text"]:
+            return str(row["text"])
+
+        row = self.db.execute(
+            """
+            SELECT text FROM messages
+            WHERE conversation_id = ?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (conversation_id,),
+        ).fetchone()
+        return str(row["text"]) if row and row["text"] else ""
 
     def message_exists(
         self,

@@ -107,6 +107,36 @@ python -m a2a_tester.main --portable --smoke-test
 
 Проверяет, что база создаётся, миграции проходят, frontend найден, FastAPI-приложение собирается.
 
+### Сброс локальных данных
+
+```bash
+python scripts/reset_data.py
+```
+
+По умолчанию это dry-run: скрипт показывает, какие SQLite-файлы и copied certificates будут удалены. Реальное удаление требует `--yes`.
+
+Полный сброс portable и системной app-data папки:
+
+```bash
+python scripts/reset_data.py --yes
+```
+
+Можно ограничить область:
+
+```bash
+python scripts/reset_data.py --portable --yes
+python scripts/reset_data.py --system --yes
+```
+
+Для нестандартных мест:
+
+```bash
+python scripts/reset_data.py --path /path/to/a2a_tester.sqlite3 --yes
+python scripts/reset_data.py --scan ~/some-folder
+```
+
+`--keep-certificates` удаляет только SQLite-файлы и оставляет `certificates/`.
+
 ## Основные сущности
 
 ### Profile
@@ -211,6 +241,8 @@ SQLite создаётся в `a2a_tester/storage/database.py`.
 ### `conversations`
 
 Хранит чаты.
+
+Список чатов в UI ограничивается настройкой `chat_list_limit.profile.{profile_id}` из `app_settings`. Это только ограничение отображения: старые чаты не удаляются автоматически.
 
 | Поле | Назначение |
 | --- | --- |
@@ -417,6 +449,7 @@ TLS применяется только для `https://` endpoint. Если end
 ## Headers
 
 Headers редактируются в UI и хранятся в `profiles.headers_json`.
+В интерфейсе headers показаны как строки: `enabled`, ключ, значение, сохранить, удалить. Значения не маскируются, чтобы тестировщик сразу видел, что именно уйдёт в запрос.
 
 Внутренний формат:
 
@@ -425,7 +458,7 @@ Headers редактируются в UI и хранятся в `profiles.header
   "Authorization": {
     "enabled": true,
     "value": "Bearer token",
-    "secret": true
+    "secret": false
   }
 }
 ```
@@ -589,6 +622,14 @@ POST /api/settings/theme
 
 Сохраняет выбранную палитру.
 
+### Chat list limit
+
+```text
+POST /api/settings/chat-list-limit
+```
+
+Сохраняет количество чатов, которое показывается в левом списке для выбранного profile.
+
 ### Profiles
 
 ```text
@@ -624,9 +665,14 @@ data/certificates/profile_{profile_id}/
 ```text
 POST /api/conversations
 GET /api/conversations/{conversation_id}
+DELETE /api/conversations/{conversation_id}
 ```
 
-Создаёт новый чат или загружает существующий.
+Создаёт новый чат, загружает существующий или удаляет чат.
+
+Удаление выполняется без подтверждения на frontend. Backend удаляет строку из `conversations`; связанные `messages`, `artifacts` и `http_events` удаляются каскадно через foreign keys.
+
+В списке чатов backend возвращает `preview` - первое пользовательское сообщение в диалоге. Если сообщений ещё нет, frontend показывает пустой fallback.
 
 ### Messages
 
@@ -684,9 +730,9 @@ const state = {
   conversation: null,
   selectedProfileId: null,
   selectedConversationId: null,
-  selectedHeaderName: null,
   theme: "studio",
   palettes: [],
+  chatListLimit: 20,
   busy: false,
 };
 ```
@@ -697,7 +743,7 @@ Frontend не хранит состояние сам по себе надолг�
 
 - `renderProfileSelect()`;
 - `renderProfileForm()`;
-- `renderHeaderCards()`;
+- `renderHeaderRows()`;
 - `renderConversations()`;
 - `renderConversation()`;
 - `renderMessage()`.

@@ -5,9 +5,9 @@ const state = {
   conversation: null,
   selectedProfileId: null,
   selectedConversationId: null,
-  selectedHeaderName: null,
   theme: "studio",
   palettes: [],
+  chatListLimit: 20,
   busy: false,
   busyLabel: "",
   busyStartedAt: 0,
@@ -20,6 +20,7 @@ const els = {
   status: $("statusText"),
   profileSelect: $("profileSelect"),
   paletteSelect: $("paletteSelect"),
+  chatListLimit: $("chatListLimit"),
   chatList: $("chatList"),
   profileName: $("profileName"),
   endpoint: $("endpoint"),
@@ -35,11 +36,7 @@ const els = {
   metadataJson: $("metadataJson"),
   taskId: $("taskId"),
   agentCard: $("agentCard"),
-  headerCards: $("headerCards"),
-  headerName: $("headerName"),
-  headerValue: $("headerValue"),
-  headerEnabled: $("headerEnabled"),
-  headerSecret: $("headerSecret"),
+  headerRows: $("headerRows"),
   conversationMeta: $("conversationMeta"),
   chatPane: $("chatPane"),
   messageInput: $("messageInput"),
@@ -65,14 +62,46 @@ async function api(path, options = {}) {
 }
 
 function setStatus(text) {
-  els.status.textContent = text || "Ready";
+  els.status.textContent = localizeStatus(text);
 }
 
-function setBusy(busy, label = "Waiting for response") {
+function localizeStatus(text) {
+  const value = String(text || "");
+  if (!value) return "Готово";
+  if (value.includes(" · ")) {
+    const [base, ...tail] = value.split(" · ");
+    return `${localizeStatus(base)} · ${tail.join(" · ")}`;
+  }
+  const exact = {
+    Ready: "Готово",
+    "Request completed": "Запрос выполнен",
+    "Stream completed": "Stream завершен",
+    "Streaming...": "Stream идет...",
+    "Agent Card loaded": "Agent Card загружена",
+    "Chat deleted": "Чат удален",
+    "message/send completed": "message/send выполнен",
+    "message/stream completed": "message/stream выполнен",
+    "tasks/get completed": "tasks/get выполнен",
+    "tasks/cancel completed": "tasks/cancel выполнен",
+  };
+  if (exact[value]) return exact[value];
+  if (value.startsWith("Input required for task")) {
+    return value.replace("Input required for task", "Требуется ввод для задачи");
+  }
+  if (value.startsWith("Stream error:")) {
+    return value.replace("Stream error:", "Ошибка stream:");
+  }
+  return value;
+}
+
+function setBusy(busy, label = "Ждем ответ") {
   state.busy = busy;
   document.body.dataset.busy = busy ? "true" : "false";
-  for (const id of ["sendBtn", "streamBtn", "saveProfileBtn", "agentCardBtn", "getTaskBtn", "cancelTaskBtn"]) {
+  for (const id of ["sendBtn", "streamBtn", "saveProfileBtn", "agentCardBtn", "getTaskBtn", "cancelTaskBtn", "chatListLimit", "addHeaderBtn"]) {
     $(id).disabled = busy;
+  }
+  for (const button of document.querySelectorAll(".chat-delete, .header-save, .header-delete")) {
+    button.disabled = busy;
   }
   if (busy) {
     startBusyTimer(label);
@@ -109,9 +138,9 @@ function updateBusyStatus() {
 function statusWithLatency(status, conversation = state.conversation) {
   const latest = conversation?.diagnostics?.at(-1);
   if (!latest?.latencyMs || /streaming/i.test(status || "")) {
-    return status || "Ready";
+    return status || "Готово";
   }
-  return `${status || "Ready"} · ${(latest.latencyMs / 1000).toFixed(1)}s`;
+  return `${status || "Готово"} · ${(latest.latencyMs / 1000).toFixed(1)}s`;
 }
 
 function escapeHtml(value) {
@@ -126,14 +155,6 @@ function escapeHtml(value) {
 function shortId(value) {
   const text = String(value || "");
   return text.length <= 12 ? text : `${text.slice(0, 8)}...${text.slice(-4)}`;
-}
-
-function maskValue(value, secret) {
-  const text = String(value || "");
-  if (!secret) return text;
-  if (!text) return "";
-  if (text.length <= 8) return "....";
-  return `${text.slice(0, 4)} ....... ${text.slice(-4)}`;
 }
 
 function profileFormPayload() {
@@ -168,8 +189,8 @@ async function saveProfile(showStatus = true) {
   state.profile = data.profile;
   state.profiles = data.profiles;
   renderProfileSelect();
-  renderHeaderCards();
-  if (showStatus) setStatus("Connection saved");
+  renderHeaderRows();
+  if (showStatus) setStatus("Соединение сохранено");
 }
 
 function applyState(data) {
@@ -181,15 +202,16 @@ function applyState(data) {
 function renderAll() {
   renderProfileSelect();
   renderPaletteSelect();
+  renderChatListLimit();
   renderProfileForm();
-  renderHeaderCards();
+  renderHeaderRows();
   renderConversations();
   renderConversation();
 }
 
 function renderProfileSelect() {
   els.profileSelect.innerHTML = state.profiles
-    .map((profile) => `<option value="${profile.id}">${escapeHtml(profile.name)} - ${escapeHtml(profile.endpoint || "no endpoint")}</option>`)
+    .map((profile) => `<option value="${profile.id}">${escapeHtml(profile.name)} - ${escapeHtml(profile.endpoint || "без endpoint")}</option>`)
     .join("");
   if (state.selectedProfileId) els.profileSelect.value = String(state.selectedProfileId);
 }
@@ -199,6 +221,10 @@ function renderPaletteSelect() {
     .map((palette) => `<option value="${palette.key}">${escapeHtml(palette.name)}</option>`)
     .join("");
   els.paletteSelect.value = state.theme || "studio";
+}
+
+function renderChatListLimit() {
+  els.chatListLimit.value = String(state.chatListLimit || 20);
 }
 
 function renderProfileForm() {
@@ -218,11 +244,28 @@ function renderProfileForm() {
 function renderConversations() {
   els.chatList.innerHTML = "";
   for (const conversation of state.conversations) {
-    const button = document.createElement("button");
-    button.className = `chat-item ${conversation.id === state.selectedConversationId ? "active" : ""}`;
-    button.innerHTML = `<strong>${escapeHtml(conversation.title)}</strong><span>${escapeHtml(shortId(conversation.contextId))}</span>`;
-    button.addEventListener("click", () => selectConversation(conversation.id));
-    els.chatList.appendChild(button);
+    const item = document.createElement("div");
+    item.className = `chat-item ${conversation.id === state.selectedConversationId ? "active" : ""}`;
+
+    const selectButton = document.createElement("button");
+    selectButton.className = "chat-select";
+    selectButton.innerHTML = `
+      <strong>${escapeHtml(conversation.title)}</strong>
+      <span class="chat-preview">${escapeHtml(conversation.preview || "Сообщений пока нет")}</span>
+      <span class="chat-context">${escapeHtml(shortId(conversation.contextId))}</span>
+    `;
+    selectButton.addEventListener("click", () => selectConversation(conversation.id));
+
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "chat-delete";
+    deleteButton.type = "button";
+    deleteButton.title = "Удалить чат";
+    deleteButton.textContent = "Удалить";
+    deleteButton.disabled = state.busy;
+    deleteButton.addEventListener("click", () => deleteConversation(conversation.id));
+
+    item.append(selectButton, deleteButton);
+    els.chatList.appendChild(item);
   }
 }
 
@@ -230,22 +273,22 @@ function renderConversation() {
   const conversation = state.conversation;
   if (!conversation) {
     els.conversationMeta.innerHTML = "";
-    els.chatPane.innerHTML = '<div class="empty-chat">No chat selected.</div>';
+    els.chatPane.innerHTML = '<div class="empty-chat">Чат не выбран.</div>';
     els.diagnostics.textContent = "[]";
     return;
   }
 
   els.taskId.value = conversation.taskId || "";
   const chips = [
-    `Context: ${conversation.contextId || "not set"}`,
+    `Context: ${conversation.contextId || "не задан"}`,
     conversation.taskId ? `Task: ${conversation.taskId}` : "",
     conversation.taskState ? `State: ${conversation.taskState}` : "",
-    conversation.inputRequired ? "Input required" : "",
+    conversation.inputRequired ? "Требуется ввод" : "",
   ].filter(Boolean);
   els.conversationMeta.innerHTML = chips.map((chip) => `<span class="meta-chip">${escapeHtml(chip)}</span>`).join("");
 
   if (!conversation.messages?.length) {
-    els.chatPane.innerHTML = '<div class="empty-chat">No messages yet.</div>';
+    els.chatPane.innerHTML = '<div class="empty-chat">Сообщений пока нет.</div>';
   } else {
     els.chatPane.innerHTML = conversation.messages.map(renderMessage).join("");
     els.chatPane.scrollTop = els.chatPane.scrollHeight;
@@ -278,90 +321,124 @@ function bubbleKind(message) {
 
 function messageLabel(message) {
   if (message.kind === "artifact") return message.taskId ? `artifact - ${shortId(message.taskId)}` : "artifact";
-  if (message.kind === "status") return message.taskId ? `task status - ${shortId(message.taskId)}` : "task status";
-  if (message.kind === "error") return "error";
-  if (message.role === "user") return "you";
+  if (message.kind === "status") return message.taskId ? `статус задачи - ${shortId(message.taskId)}` : "статус задачи";
+  if (message.kind === "error") return "ошибка";
+  if (message.role === "user") return "вы";
   if (message.role === "agent") return "agent";
   return `${message.role} / ${message.kind}`;
 }
 
-function renderHeaderCards() {
-  const headers = state.profile?.headers || [];
+function headerRecords() {
+  if (!state.profile) return [];
+  if (!Array.isArray(state.profile.headers)) {
+    state.profile.headers = [];
+  }
+  return state.profile.headers;
+}
+
+function renderHeaderRows() {
+  const headers = headerRecords();
   if (!headers.length) {
-    els.headerCards.innerHTML = '<div class="empty-chat">No headers configured.</div>';
+    els.headerRows.innerHTML = '<div class="empty-chat">Заголовков пока нет.</div>';
     return;
   }
-  els.headerCards.innerHTML = headers
-    .map((header) => {
-      const active = header.name === state.selectedHeaderName ? " active" : "";
-      const disabled = header.enabled ? "" : " disabled";
+
+  els.headerRows.innerHTML = headers
+    .map((header, index) => {
+      const enabled = header.enabled !== false;
       return `
-        <button class="header-card${active}${disabled}" data-header="${escapeHtml(header.name)}">
-          <div class="header-top">
-            <span class="header-name">${escapeHtml(header.name)}</span>
-            <span class="pill ${header.enabled ? "on" : ""}">${header.enabled ? "enabled" : "off"}</span>
-            <span class="pill">${header.secret ? "masked" : "visible"}</span>
+        <div class="header-row" data-index="${index}">
+          <label class="header-enabled-toggle" title="Включен">
+            <input class="header-enabled-input" type="checkbox" ${enabled ? "checked" : ""} />
+          </label>
+          <input class="header-key-input" type="text" value="${escapeHtml(header.name || "")}" placeholder="Authorization" autocomplete="off" />
+          <input class="header-value-input" type="text" value="${escapeHtml(header.value || "")}" placeholder="Bearer ..." autocomplete="off" />
+          <div class="header-row-actions">
+            <button class="header-save" type="button" title="Сохранить заголовок">✓</button>
+            <button class="header-delete" type="button" title="Удалить заголовок">×</button>
           </div>
-          <code class="header-value">${escapeHtml(maskValue(header.value, header.secret)) || "&nbsp;"}</code>
-        </button>
+        </div>
       `;
     })
     .join("");
-  for (const card of els.headerCards.querySelectorAll(".header-card")) {
-    card.addEventListener("click", () => editHeader(card.dataset.header));
+
+  for (const row of els.headerRows.querySelectorAll(".header-row")) {
+    const index = Number(row.dataset.index);
+    row.querySelector(".header-enabled-input").addEventListener("change", () => syncHeaderRow(index));
+    row.querySelector(".header-key-input").addEventListener("input", () => syncHeaderRow(index));
+    row.querySelector(".header-value-input").addEventListener("input", () => syncHeaderRow(index));
+    row.querySelector(".header-save").addEventListener("click", () => saveHeaderRow(index));
+    row.querySelector(".header-delete").addEventListener("click", () => deleteHeaderRow(index));
   }
 }
 
-function clearHeaderForm() {
-  state.selectedHeaderName = null;
-  els.headerName.value = "";
-  els.headerValue.value = "";
-  els.headerEnabled.checked = true;
-  els.headerSecret.checked = true;
-  renderHeaderCards();
-}
-
-function editHeader(name) {
-  const header = state.profile?.headers?.find((item) => item.name === name);
-  if (!header) return;
-  state.selectedHeaderName = header.name;
-  els.headerName.value = header.name;
-  els.headerValue.value = header.value || "";
-  els.headerEnabled.checked = Boolean(header.enabled);
-  els.headerSecret.checked = Boolean(header.secret);
-  renderHeaderCards();
-}
-
-function saveHeader() {
-  const name = els.headerName.value.trim();
-  if (!name) {
-    setStatus("Header name is empty");
-    return;
-  }
-  const next = {
-    name,
-    value: els.headerValue.value,
-    enabled: els.headerEnabled.checked,
-    secret: els.headerSecret.checked,
+function normalizeHeader(header) {
+  return {
+    name: String(header?.name || "").trim(),
+    value: String(header?.value || ""),
+    enabled: header?.enabled !== false,
+    secret: false,
   };
-  const headers = (state.profile.headers || []).filter(
-    (header) => header.name.toLowerCase() !== name.toLowerCase() && header.name !== state.selectedHeaderName,
-  );
-  headers.push(next);
-  state.profile.headers = headers;
-  state.selectedHeaderName = name;
-  renderHeaderCards();
-  setStatus(`Header ${name} saved locally`);
 }
 
-function deleteHeader() {
-  if (!state.selectedHeaderName) {
-    setStatus("Select a header first");
-    return;
+function syncHeaderRow(index) {
+  const row = els.headerRows.querySelector(`.header-row[data-index="${index}"]`);
+  const headers = headerRecords();
+  if (!row || !headers[index]) return;
+  headers[index] = {
+    name: row.querySelector(".header-key-input").value,
+    value: row.querySelector(".header-value-input").value,
+    enabled: row.querySelector(".header-enabled-input").checked,
+    secret: false,
+  };
+}
+
+function syncAllHeaderRows() {
+  for (const row of els.headerRows.querySelectorAll(".header-row")) {
+    syncHeaderRow(Number(row.dataset.index));
   }
-  state.profile.headers = (state.profile.headers || []).filter((header) => header.name !== state.selectedHeaderName);
-  clearHeaderForm();
-  setStatus("Header deleted locally");
+}
+
+function addHeaderRow() {
+  const headers = headerRecords();
+  headers.push({ name: "", value: "", enabled: true, secret: false });
+  renderHeaderRows();
+  const lastInput = els.headerRows.querySelector(`.header-row[data-index="${headers.length - 1}"] .header-key-input`);
+  lastInput?.focus();
+  setStatus("Добавлена строка заголовка");
+}
+
+async function saveHeaderRow(index) {
+  try {
+    syncAllHeaderRows();
+    const headers = headerRecords();
+    const current = normalizeHeader(headers[index]);
+    if (!current.name) {
+      setStatus("Укажите ключ заголовка");
+      els.headerRows.querySelector(`.header-row[data-index="${index}"] .header-key-input`)?.focus();
+      return;
+    }
+
+    const currentName = current.name.toLowerCase();
+    state.profile.headers = headers
+      .map(normalizeHeader)
+      .filter((header, itemIndex) => header.name && (itemIndex === index || header.name.toLowerCase() !== currentName));
+    await saveProfile(false);
+    setStatus(`Заголовок ${current.name} сохранен`);
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function deleteHeaderRow(index) {
+  try {
+    const headers = headerRecords();
+    headers.splice(index, 1);
+    await saveProfile(false);
+    setStatus("Заголовок удален");
+  } catch (error) {
+    setStatus(error.message);
+  }
 }
 
 async function selectProfile(profileId) {
@@ -371,9 +448,9 @@ async function selectProfile(profileId) {
   state.conversations = data.conversations;
   state.selectedConversationId = data.selectedConversationId;
   state.conversation = data.conversation;
-  state.selectedHeaderName = null;
+  state.chatListLimit = data.chatListLimit || state.chatListLimit;
   renderAll();
-  setStatus("Connection loaded");
+  setStatus("Соединение загружено");
 }
 
 async function selectConversation(conversationId) {
@@ -382,7 +459,7 @@ async function selectConversation(conversationId) {
   state.conversation = data.conversation;
   renderConversations();
   renderConversation();
-  setStatus(state.conversation.inputRequired ? "Input required" : "Chat loaded");
+  setStatus(state.conversation.inputRequired ? "Требуется ввод" : "Чат загружен");
 }
 
 async function newProfile() {
@@ -391,7 +468,7 @@ async function newProfile() {
     body: JSON.stringify({}),
   });
   applyState({ ...state, ...data });
-  setStatus("Connection created");
+  setStatus("Соединение создано");
 }
 
 async function newChat() {
@@ -404,13 +481,55 @@ async function newChat() {
   state.conversation = data.conversation;
   renderConversations();
   renderConversation();
-  setStatus("New chat created");
+  setStatus("Новый чат создан");
+}
+
+async function deleteConversation(conversationId) {
+  if (state.busy) return;
+  setBusy(true, "Удаляем чат");
+  try {
+    const activeId = state.selectedConversationId || 0;
+    const data = await api(`/api/conversations/${conversationId}?activeConversationId=${activeId}`, {
+      method: "DELETE",
+    });
+    state.conversations = data.conversations;
+    state.selectedConversationId = data.selectedConversationId;
+    state.conversation = data.conversation;
+    renderConversations();
+    renderConversation();
+    setStatus(data.status || "Чат удален");
+  } catch (error) {
+    setStatus(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function updateChatListLimit() {
+  if (!state.selectedProfileId) return;
+  const limit = Number(els.chatListLimit.value || 20);
+  try {
+    const data = await api("/api/settings/chat-list-limit", {
+      method: "POST",
+      body: JSON.stringify({
+        profileId: state.selectedProfileId,
+        limit,
+      }),
+    });
+    state.chatListLimit = data.chatListLimit;
+    state.conversations = data.conversations;
+    renderChatListLimit();
+    renderConversations();
+    setStatus("Лимит чатов сохранен");
+  } catch (error) {
+    setStatus(error.message);
+  }
 }
 
 async function sendMessage(stream = false) {
   const text = els.messageInput.value.trim();
   if (!text) return;
-  setBusy(true, stream ? "Streaming response" : "Waiting for response");
+  setBusy(true, stream ? "Ждем stream-ответ" : "Ждем ответ");
   try {
     await saveProfile(false);
     if (stream) {
@@ -471,11 +590,11 @@ function applyConversationUpdate(data) {
   state.selectedConversationId = state.conversation?.id || state.selectedConversationId;
   renderConversations();
   renderConversation();
-  setStatus(statusWithLatency(data.status || "Ready", state.conversation));
+  setStatus(statusWithLatency(data.status || "Готово", state.conversation));
 }
 
 async function taskRequest(method) {
-  setBusy(true, method === "get" ? "Getting task" : "Cancelling task");
+  setBusy(true, method === "get" ? "Получаем задачу" : "Отменяем задачу");
   try {
     await saveProfile(false);
     const data = await api(`/api/tasks/${method}`, {
@@ -495,7 +614,7 @@ async function taskRequest(method) {
 }
 
 async function loadAgentCard() {
-  setBusy(true, "Loading Agent Card");
+  setBusy(true, "Загружаем Agent Card");
   try {
     await saveProfile(false);
     const data = await api("/api/agent-card", {
@@ -532,7 +651,7 @@ async function uploadCert(input, fieldName, targetInput) {
     state.profile = { ...state.profile, ...data.profile };
     syncProfileDraftFromForm();
     renderProfileSelect();
-    setStatus("Certificate copy imported");
+    setStatus("Копия сертификата импортирована");
   } catch (error) {
     setStatus(error.message);
   } finally {
@@ -548,13 +667,13 @@ async function pickCertificatePath(fieldName, targetInput) {
       targetInput.value = path;
       syncProfileDraftFromForm();
       await saveProfile(false);
-      setStatus("Certificate path selected and saved");
+      setStatus("Путь к сертификату выбран и сохранен");
       return;
     } catch (error) {
       setStatus(error.message);
     }
   }
-  setStatus("Desktop file dialog unavailable. Paste absolute path or use Import Copy.");
+  setStatus("Desktop-диалог недоступен. Вставьте абсолютный путь или используйте импорт копии.");
 }
 
 function wireEvents() {
@@ -566,18 +685,23 @@ function wireEvents() {
   $("agentCardBtn").addEventListener("click", loadAgentCard);
   $("getTaskBtn").addEventListener("click", () => taskRequest("get"));
   $("cancelTaskBtn").addEventListener("click", () => taskRequest("cancel"));
-  $("newHeaderBtn").addEventListener("click", clearHeaderForm);
-  $("saveHeaderBtn").addEventListener("click", saveHeader);
-  $("deleteHeaderBtn").addEventListener("click", deleteHeader);
+  $("addHeaderBtn").addEventListener("click", addHeaderRow);
   $("formatMetadataBtn").addEventListener("click", () => {
     try {
       els.metadataJson.value = JSON.stringify(JSON.parse(els.metadataJson.value || "{}"), null, 2);
-      setStatus("Metadata formatted");
+      setStatus("Метаданные отформатированы");
     } catch (error) {
       setStatus(error.message);
     }
   });
   els.profileSelect.addEventListener("change", () => selectProfile(els.profileSelect.value));
+  els.chatListLimit.addEventListener("change", updateChatListLimit);
+  els.chatListLimit.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      els.chatListLimit.blur();
+    }
+  });
   els.paletteSelect.addEventListener("change", async () => {
     state.theme = els.paletteSelect.value;
     document.body.dataset.theme = state.theme;
@@ -621,7 +745,7 @@ async function init() {
   try {
     const data = await api("/api/state");
     applyState(data);
-    setStatus("Ready");
+    setStatus("Готово");
   } catch (error) {
     setStatus(error.message);
   }
