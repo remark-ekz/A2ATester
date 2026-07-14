@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from a2a_tester.a2a.client import A2ARequestConfig, HttpExchange, derive_agent_card_url, fetch_agent_card, post_json_rpc, stream_json_rpc
 from a2a_tester.a2a.jsonrpc import build_message_request, build_task_request
 from a2a_tester.a2a.render import RenderItem, extract_context_id, extract_render_items, pretty_json
+from a2a_tester.ids import new_uuidv7
 from a2a_tester.storage.database import Database, Profile, loads
 
 
@@ -939,9 +940,7 @@ def default_chat_title() -> str:
 
 
 def new_context_id() -> str:
-    import uuid
-
-    return str(uuid.uuid4())
+    return new_uuidv7()
 
 
 def palettes() -> list[dict[str, str]]:

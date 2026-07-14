@@ -530,13 +530,15 @@ Metadata вводится как JSON object и хранится в `profiles.me
 POST /api/conversations
 ```
 
-Backend создаёт UUID:
+Backend создаёт UUIDv7:
 
 ```python
 new_context_id()
 ```
 
 Этот `contextId` хранится в `conversations.context_id` и передаётся в каждом новом `message`.
+
+UUIDv7 используется только для новых context. Уже сохранённые чаты продолжают работать со своим текущим `contextId`.
 
 Если агент возвращает другой `contextId` в response, backend обновляет chat context через `update_conversation_context()`.
 
