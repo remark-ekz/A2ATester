@@ -41,6 +41,7 @@ class Profile:
     client_key_path: str
     timeout_seconds: float
     protocol_version: str
+    tenant: str
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Profile":
@@ -57,6 +58,7 @@ class Profile:
             client_key_path=row["client_key_path"] or "",
             timeout_seconds=float(row["timeout_seconds"] or 60),
             protocol_version=row["protocol_version"] or "1.0",
+            tenant=row["tenant"] or "",
         )
 
 
@@ -121,6 +123,9 @@ class Database:
             version = 1
         if version < 2:
             self._migrate_v2()
+            version = 2
+        if version < 3:
+            self._migrate_v3()
 
     def _migrate_v1(self) -> None:
         with self.transaction() as conn:
@@ -144,6 +149,7 @@ class Database:
                     client_key_path TEXT NOT NULL DEFAULT '',
                     timeout_seconds REAL NOT NULL DEFAULT 60,
                     protocol_version TEXT NOT NULL DEFAULT '1.0',
+                    tenant TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -217,6 +223,13 @@ class Database:
                 conn.execute("ALTER TABLE profiles ADD COLUMN routes_json TEXT NOT NULL DEFAULT '{}'")
             conn.execute("PRAGMA user_version = 2")
 
+    def _migrate_v3(self) -> None:
+        with self.transaction() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()}
+            if "tenant" not in columns:
+                conn.execute("ALTER TABLE profiles ADD COLUMN tenant TEXT NOT NULL DEFAULT ''")
+            conn.execute("PRAGMA user_version = 3")
+
     def ensure_default_profile(self) -> None:
         existing = self.db.execute("SELECT id FROM profiles LIMIT 1").fetchone()
         if existing:
@@ -288,6 +301,7 @@ class Database:
         client_key_path: str,
         timeout_seconds: float,
         protocol_version: str,
+        tenant: str,
     ) -> None:
         with self.transaction() as conn:
             conn.execute(
@@ -304,6 +318,7 @@ class Database:
                     client_key_path = ?,
                     timeout_seconds = ?,
                     protocol_version = ?,
+                    tenant = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -319,6 +334,7 @@ class Database:
                     client_key_path,
                     timeout_seconds,
                     protocol_version,
+                    tenant,
                     now_iso(),
                     profile_id,
                 ),

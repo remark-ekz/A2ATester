@@ -32,6 +32,8 @@ const els = {
   tasksGetRoute: $("tasksGetRoute"),
   tasksCancelRoute: $("tasksCancelRoute"),
   protocolVersion: $("protocolVersion"),
+  tenant: $("tenant"),
+  protocolHint: $("protocolHint"),
   timeoutSeconds: $("timeoutSeconds"),
   tlsVerify: $("tlsVerify"),
   caBundlePath: $("caBundlePath"),
@@ -205,6 +207,7 @@ function profileFormPayload() {
       tasksCancel: els.tasksCancelRoute.value.trim(),
     },
     protocolVersion: els.protocolVersion.value,
+    tenant: els.tenant.value.trim(),
     timeoutSeconds: Number(els.timeoutSeconds.value || 60),
     tlsVerify: els.tlsVerify.checked,
     caBundlePath: els.caBundlePath.value.trim(),
@@ -281,12 +284,23 @@ function renderProfileForm() {
   els.tasksGetRoute.value = profile.routes?.tasksGet || "";
   els.tasksCancelRoute.value = profile.routes?.tasksCancel || "";
   els.protocolVersion.value = profile.protocolVersion || "1.0";
+  els.tenant.value = profile.tenant || "";
   els.timeoutSeconds.value = profile.timeoutSeconds || 60;
   els.tlsVerify.checked = Boolean(profile.tlsVerify);
   els.caBundlePath.value = profile.caBundlePath || "";
   els.clientCertPath.value = profile.clientCertPath || "";
   els.clientKeyPath.value = profile.clientKeyPath || "";
   els.metadataJson.value = profile.metadataJson || "{}";
+  renderProtocolHint();
+}
+
+function renderProtocolHint() {
+  const version = els.protocolVersion.value || "1.0";
+  if (version === "1.0") {
+    els.protocolHint.textContent = "A2A 1.0: SendMessage, SendStreamingMessage, GetTask и CancelTask; заголовок A2A-Version: 1.0 добавляется автоматически.";
+    return;
+  }
+  els.protocolHint.textContent = `A2A ${version}: message/send, message/stream, tasks/get и tasks/cancel; заголовок A2A-Version: ${version} добавляется автоматически.`;
 }
 
 function renderConversations() {
@@ -1058,6 +1072,7 @@ function wireProfileDraftEvents() {
     els.messageStreamRoute,
     els.tasksGetRoute,
     els.tasksCancelRoute,
+    els.tenant,
     els.timeoutSeconds,
     els.caBundlePath,
     els.clientCertPath,
@@ -1066,7 +1081,10 @@ function wireProfileDraftEvents() {
   ]) {
     element.addEventListener("input", syncProfileDraftFromForm);
   }
-  els.protocolVersion.addEventListener("change", syncProfileDraftFromForm);
+  els.protocolVersion.addEventListener("change", () => {
+    syncProfileDraftFromForm();
+    renderProtocolHint();
+  });
   els.tlsVerify.addEventListener("change", syncProfileDraftFromForm);
 }
 

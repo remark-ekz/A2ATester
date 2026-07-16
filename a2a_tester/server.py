@@ -19,14 +19,20 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from a2a_tester.a2a.client import A2ARequestConfig, HttpExchange, derive_agent_card_url, fetch_agent_card, post_json_rpc, stream_json_rpc
-from a2a_tester.a2a.jsonrpc import build_message_request, build_task_request
+from a2a_tester.a2a.jsonrpc import (
+    build_message_request,
+    build_task_request,
+    message_method,
+    normalize_protocol_version,
+    task_method,
+)
 from a2a_tester.a2a.render import RenderItem, extract_context_id, extract_render_items, pretty_json
 from a2a_tester.ids import new_uuidv7
 from a2a_tester.storage.database import Database, Profile, loads
 
 
 SECRET_HEADER_NAMES = {"authorization", "cookie", "x-api-key", "api-key", "proxy-authorization"}
-INPUT_REQUIRED_STATES = {"input-required", "input_required"}
+INPUT_REQUIRED_STATES = {"input-required", "input_required", "task_state_input_required"}
 CERTIFICATE_UPLOAD_LIMIT_BYTES = 2 * 1024 * 1024
 DEFAULT_CHAT_LIST_LIMIT = 20
 MIN_CHAT_LIST_LIMIT = 1
@@ -118,6 +124,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
     async def update_profile(profile_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         profile = db.get_profile(profile_id)
         metadata = parse_metadata(payload.get("metadataJson", profile.metadata_json))
+        protocol_version = parse_protocol_version(payload.get("protocolVersion", profile.protocol_version))
         ca_bundle_path = str(payload.get("caBundlePath") or "")
         client_cert_path = str(payload.get("clientCertPath") or "")
         client_key_path = str(payload.get("clientKeyPath") or "")
@@ -134,7 +141,8 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             client_cert_path=client_cert_path,
             client_key_path=client_key_path,
             timeout_seconds=float(payload.get("timeoutSeconds") or 60),
-            protocol_version=str(payload.get("protocolVersion") or "1.0"),
+            protocol_version=protocol_version,
+            tenant=str(payload.get("tenant") or "").strip(),
         )
         return {"profile": profile_payload(db.get_profile(profile_id)), "profiles": profile_list(db)}
 
@@ -189,6 +197,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             client_key_path=values["client_key_path"],
             timeout_seconds=profile.timeout_seconds,
             protocol_version=profile.protocol_version,
+            tenant=profile.tenant,
         )
         return {"path": str(destination), "profile": profile_payload(db.get_profile(profile_id))}
 
@@ -233,12 +242,15 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         profile_id, conversation_id, text = request_ids_and_text(payload)
         profile = db.get_profile(profile_id)
         conversation = ensure_conversation_context(db, conversation_id)
+        method = message_method(profile.protocol_version)
         request_json = build_message_request(
-            method="message/send",
+            method=method,
             text=text,
             context_id=conversation.context_id,
             task_id=continuation_task_for_input_required(db, conversation_id),
             metadata=parse_metadata(profile.metadata_json),
+            protocol_version=profile.protocol_version,
+            tenant=profile.tenant,
         )
         db.add_message(conversation_id=conversation_id, role="user", kind="message", text=text, raw_json=request_json["params"]["message"])
         exchange = await run_in_threadpool(
@@ -248,7 +260,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         )
         if await request.is_disconnected():
             return refreshed(db, profile_id, conversation_id, "Вызов остановлен пользователем")
-        persist_exchange(db, conversation_id, profile_id, exchange, "message/send")
+        persist_exchange(db, conversation_id, profile_id, exchange, method)
         if exchange.error:
             db.add_message(conversation_id=conversation_id, role="system", kind="error", text=exchange.error, raw_json={})
             return refreshed(db, profile_id, conversation_id, f"Ошибка запроса: {exchange.error}")
@@ -261,12 +273,15 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         profile_id, conversation_id, text = request_ids_and_text(payload)
         profile = db.get_profile(profile_id)
         conversation = ensure_conversation_context(db, conversation_id)
+        method = message_method(profile.protocol_version, stream=True)
         request_json = build_message_request(
-            method="message/stream",
+            method=method,
             text=text,
             context_id=conversation.context_id,
             task_id=continuation_task_for_input_required(db, conversation_id),
             metadata=parse_metadata(profile.metadata_json),
+            protocol_version=profile.protocol_version,
+            tenant=profile.tenant,
         )
         db.add_message(conversation_id=conversation_id, role="user", kind="message", text=text, raw_json=request_json["params"]["message"])
         stream_endpoint = operation_endpoint(profile, "message_stream", profile.endpoint)
@@ -280,8 +295,13 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
                             conversation_id=conversation_id,
                             profile_id=profile_id,
                             jsonrpc_id=str(request_json.get("id", "")),
-                            method="message/stream",
-                            request_json=diagnostic_request(request_json, item.get("url", stream_endpoint), item.get("method", "POST")),
+                            method=method,
+                            request_json=diagnostic_request(
+                                request_json,
+                                item.get("url", stream_endpoint),
+                                item.get("method", "POST"),
+                                item.get("request_headers", {}),
+                            ),
                             response_json={"stream": "opened"},
                             response_headers_json=item.get("headers", {}),
                             status_code=item.get("status_code"),
@@ -293,7 +313,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
                             conversation_id=conversation_id,
                             profile_id=profile_id,
                             jsonrpc_id=str(request_json.get("id", "")),
-                            method="message/stream",
+                            method=method,
                             request_json={},
                             response_json=item,
                             response_headers_json={},
@@ -305,7 +325,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
                     conversation_id=conversation_id,
                     profile_id=profile_id,
                     jsonrpc_id=str(request_json.get("id", "")),
-                    method="message/stream",
+                    method=method,
                     request_json=diagnostic_request(request_json, stream_endpoint, "POST"),
                     error=str(exc),
                 )
@@ -318,9 +338,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
 
     @app.post("/api/tasks/{method_name}")
     async def task_request(method_name: str, request: Request, payload: dict[str, Any]) -> dict[str, Any]:
-        method_map = {"get": "tasks/get", "cancel": "tasks/cancel"}
-        method = method_map.get(method_name)
-        if not method:
+        if method_name not in {"get", "cancel"}:
             raise HTTPException(status_code=404, detail="Unknown task method")
         profile_id = int(payload.get("profileId") or 0)
         conversation_id = int(payload.get("conversationId") or 0)
@@ -328,8 +346,14 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         if not task_id:
             raise HTTPException(status_code=400, detail="taskId is required")
         profile = db.get_profile(profile_id)
-        request_json = build_task_request(method=method, task_id=task_id)
-        route_key = "tasks_get" if method == "tasks/get" else "tasks_cancel"
+        method = task_method(profile.protocol_version, method_name)
+        request_json = build_task_request(
+            method=method,
+            task_id=task_id,
+            protocol_version=profile.protocol_version,
+            tenant=profile.tenant,
+        )
+        route_key = "tasks_get" if method_name == "get" else "tasks_cancel"
         exchange = await run_in_threadpool(
             post_json_rpc,
             profile_config(profile, endpoint=operation_endpoint(profile, route_key, profile.endpoint)),
@@ -338,7 +362,7 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         if await request.is_disconnected():
             return refreshed(db, profile_id, conversation_id, "Вызов остановлен пользователем")
         persist_exchange(db, conversation_id, profile_id, exchange, method)
-        status = ("tasks/get выполнен" if method == "tasks/get" else "tasks/cancel выполнен") if not exchange.error else f"Ошибка запроса: {exchange.error}"
+        status = (f"{method} выполнен" if not exchange.error else f"Ошибка запроса: {exchange.error}")
         payload = refreshed(db, profile_id, conversation_id, status)
         payload["taskResult"] = exchange.response_json if not exchange.error else {"error": exchange.error}
         return payload
@@ -514,6 +538,7 @@ def profile_payload(profile: Profile) -> dict[str, Any]:
         "clientKeyPath": profile.client_key_path,
         "timeoutSeconds": profile.timeout_seconds,
         "protocolVersion": profile.protocol_version,
+        "tenant": profile.tenant,
     }
 
 
@@ -625,6 +650,7 @@ def profile_config(profile: Profile, *, endpoint: str | None = None) -> A2AReque
         client_cert_path=profile.client_cert_path,
         client_key_path=profile.client_key_path,
         timeout_seconds=profile.timeout_seconds,
+        protocol_version=profile.protocol_version,
     )
 
 
@@ -646,7 +672,12 @@ def persist_exchange(db: Database, conversation_id: int | None, profile_id: int 
         profile_id=profile_id,
         jsonrpc_id=request_id,
         method=method,
-        request_json=diagnostic_request(exchange.request_json, exchange.request_url, exchange.request_method),
+        request_json=diagnostic_request(
+            exchange.request_json,
+            exchange.request_url,
+            exchange.request_method,
+            exchange.request_headers,
+        ),
         response_json=exchange.response_json,
         response_headers_json=redact_headers(exchange.response_headers),
         status_code=exchange.status_code,
@@ -801,16 +832,24 @@ def resolve_route_url(base_endpoint: str, route: str, default_url: str) -> str:
     return urljoin(base.rstrip("/") + "/", route)
 
 
-def diagnostic_request(body: dict[str, Any], url: str = "", method: str = "POST") -> dict[str, Any]:
+def diagnostic_request(
+    body: dict[str, Any],
+    url: str = "",
+    method: str = "POST",
+    headers: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not url:
         return body
-    if body.get("method") == method and body.get("url") == url:
+    if body.get("method") == method and body.get("url") == url and not headers:
         return body
-    return {
+    payload: dict[str, Any] = {
         "method": method or "POST",
         "url": url,
         "body": body,
     }
+    if headers:
+        payload["headers"] = redact_headers(headers)
+    return payload
 
 
 def parse_metadata(value: Any) -> dict[str, Any]:
@@ -823,6 +862,13 @@ def parse_metadata(value: Any) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise HTTPException(status_code=400, detail="Metadata must be a JSON object")
     return parsed
+
+
+def parse_protocol_version(value: Any) -> str:
+    try:
+        return normalize_protocol_version(str(value or "1.0"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def validate_certificate_paths(ca_bundle_path: str, client_cert_path: str, client_key_path: str) -> None:
@@ -945,9 +991,9 @@ def new_context_id() -> str:
 
 def palettes() -> list[dict[str, str]]:
     return [
-        {"key": "studio", "name": "Светлое стекло"},
-        {"key": "graphite", "name": "Темное стекло"},
-        {"key": "harbor", "name": "Глубокая гавань"},
+        {"key": "studio", "name": "Светлый режим"},
+        {"key": "graphite", "name": "Темный режим"},
+        {"key": "harbor", "name": "Глубокий графит"},
     ]
 
 

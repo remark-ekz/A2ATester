@@ -7,11 +7,19 @@
     <link rel="stylesheet" href="/static/app.css" />
   </head>
   <body>
+    <div class="signal-strip" aria-hidden="true">
+      <div class="signal-strip-track">
+        <span>A2A PROTOCOL LAB</span><span>ТЕСТИРУЙТЕ АГЕНТОВ</span><span>JSON-RPC</span><span>ПРОВЕРЯЙТЕ ПОТОКИ</span>
+        <span>A2A PROTOCOL LAB</span><span>ТЕСТИРУЙТЕ АГЕНТОВ</span><span>JSON-RPC</span><span>ПРОВЕРЯЙТЕ ПОТОКИ</span>
+      </div>
+    </div>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
+          <div class="brand-mark">A2A</div>
           <div>
-            <h1>A2A Tester</h1>
+            <p class="brand-kicker">PROTOCOL TESTER</p>
+            <h1>A2A<br />Tester</h1>
             <p id="statusText">Запуск...</p>
           </div>
         </div>
@@ -37,6 +45,13 @@
       </aside>
 
       <main class="main">
+        <section class="workspace-header">
+          <div>
+            <p class="workspace-kicker">A2A / РАБОЧЕЕ ПРОСТРАНСТВО</p>
+            <h2>Проверка агента</h2>
+          </div>
+          <p class="workspace-note">Запросы, поток и состояние задачи в одном диалоге</p>
+        </section>
         <section class="settings-stack">
           <details open>
             <summary>Соединение</summary>
@@ -46,16 +61,21 @@
                 <input id="profileName" type="text" />
               </label>
               <label class="wide">
-                <span>Host / A2A endpoint</span>
+                <span>Адрес агента</span>
                 <input id="endpoint" type="url" />
               </label>
               <label>
-                <span>Протокол</span>
+                <span>Версия A2A</span>
                 <select id="protocolVersion">
                   <option value="1.0">1.0</option>
                   <option value="0.3">0.3</option>
                   <option value="0.2">0.2</option>
+                  <option value="0.1">0.1</option>
                 </select>
+              </label>
+              <label class="wide">
+                <span>Контур (tenant) A2A 1.0</span>
+                <input id="tenant" type="text" placeholder="Только если указан в Agent Card" />
               </label>
               <label>
                 <span>Таймаут, секунды</span>
@@ -63,6 +83,7 @@
               </label>
               <button id="agentCardBtn" class="ghost align-end">Загрузить Agent Card</button>
             </div>
+            <p id="protocolHint" class="protocol-hint"></p>
             <pre id="agentCard" class="json-panel small"></pre>
           </details>
 
@@ -70,23 +91,23 @@
             <summary>Ручки запросов</summary>
             <div class="routes-grid">
               <label>
-                <span>Agent Card</span>
+                <span>Карточка агента</span>
                 <input id="agentCardRoute" type="text" placeholder="/.well-known/agent-card.json" />
               </label>
               <label>
-                <span>message/send</span>
+                <span>Обычный запрос сообщения</span>
                 <input id="messageSendRoute" type="text" placeholder="по умолчанию: Host / A2A endpoint" />
               </label>
               <label>
-                <span>message/stream</span>
+                <span>Поток сообщений</span>
                 <input id="messageStreamRoute" type="text" placeholder="по умолчанию: Host / A2A endpoint" />
               </label>
               <label>
-                <span>tasks/get</span>
+                <span>Получение задачи</span>
                 <input id="tasksGetRoute" type="text" placeholder="по умолчанию: Host / A2A endpoint" />
               </label>
               <label>
-                <span>tasks/cancel</span>
+                <span>Отмена задачи</span>
                 <input id="tasksCancelRoute" type="text" placeholder="по умолчанию: Host / A2A endpoint" />
               </label>
             </div>
@@ -101,7 +122,7 @@
               </label>
               <div class="file-row">
                 <label>
-                  <span>CA bundle</span>
+                  <span>Цепочка доверия (CA bundle)</span>
                   <input id="caBundlePath" type="text" />
                 </label>
                 <div class="cert-actions">
@@ -112,7 +133,7 @@
               </div>
               <div class="file-row">
                 <label>
-                  <span>Client certificate</span>
+                  <span>Клиентский сертификат</span>
                   <input id="clientCertPath" type="text" />
                 </label>
                 <div class="cert-actions">
@@ -123,7 +144,7 @@
               </div>
               <div class="file-row">
                 <label>
-                  <span>Client key</span>
+                  <span>Ключ клиента</span>
                   <input id="clientKeyPath" type="text" />
                 </label>
                 <div class="cert-actions">
@@ -159,7 +180,7 @@
             <summary>Инструменты задач</summary>
             <div class="task-tools">
               <label class="wide">
-                <span>Task ID</span>
+                <span>Идентификатор задачи (Task ID)</span>
                 <input id="taskId" type="text" />
               </label>
               <button id="getTaskBtn" class="ghost">Получить задачу</button>

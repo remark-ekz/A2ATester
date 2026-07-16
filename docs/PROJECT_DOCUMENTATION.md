@@ -11,7 +11,7 @@ A2A Tester - локальное desktop/web-приложение для ручн
 - создать подключение к A2A-host;
 - настроить endpoint, headers, TLS/сертификаты, metadata и timeout;
 - создать отдельный чат с собственным `contextId`;
-- отправить `message/send` или `message/stream`;
+- отправить обычный или потоковый A2A JSON-RPC запрос;
 - увидеть сообщения пользователя, сообщения агента, task statuses, artifacts и ошибки в виде обычного чата;
 - открыть JSON diagnostics и посмотреть сырой request/response;
 - сохранить состояние приложения между перезапусками.
@@ -154,7 +154,8 @@ Profile - это подключение к конкретному A2A-host.
 - путь к client certificate;
 - путь к client key;
 - timeout;
-- версия протокола.
+- версия протокола;
+- `tenant` для A2A 1.0.
 
 Сертификаты относятся именно к профилю, а не к чату. Это важно: один host может иметь много чатов, но TLS-настройки у них общие.
 
@@ -236,6 +237,7 @@ SQLite создаётся в `a2a_tester/storage/database.py`.
 | `client_key_path` | путь к client key |
 | `timeout_seconds` | timeout запросов |
 | `protocol_version` | выбранная версия протокола |
+| `tenant` | опциональный tenant из `AgentCard.supportedInterfaces` для A2A 1.0 |
 | `created_at` | дата создания |
 | `updated_at` | дата обновления |
 
@@ -310,7 +312,22 @@ SQLite создаётся в `a2a_tester/storage/database.py`.
 | `error` | ошибка |
 | `created_at` | дата сохранения |
 
-## Жизненный цикл запроса `message/send`
+## Версии A2A JSON-RPC
+
+Приложение поддерживает версии `0.1`, `0.2`, `0.3` и `1.0` в JSON-RPC binding.
+
+| Версия | Методы сообщения | Методы task | Формат Message/Part |
+| --- | --- | --- | --- |
+| `0.1`-`0.3` | `message/send`, `message/stream` | `tasks/get`, `tasks/cancel` | legacy: `kind: message`, `kind: text` |
+| `1.0` | `SendMessage`, `SendStreamingMessage` | `GetTask`, `CancelTask` | `ROLE_USER`, part с `text` и `mediaType`, без `kind` |
+
+Для каждого HTTP-запроса клиент передаёт заголовок `A2A-Version` с выбранной версией. Если в пользовательских headers уже есть `A2A-Version` с любым регистром, он не заменяется: это позволяет намеренно проверить реакцию агента на несовместимую версию.
+
+В A2A 1.0 агент может вернуть данные в оболочках `task`, `message`, `statusUpdate`, `artifactUpdate`. Клиент сохраняет каждую извлечённую сущность отдельной строкой чата. Потоковые события сохраняются в фактическом порядке поступления.
+
+Если в выбранном `supportedInterfaces` из Agent Card задан `tenant`, его нужно перенести в поле профиля `Tenant`. Для 1.0 это значение добавляется в `params` запросов `SendMessage`, `SendStreamingMessage`, `GetTask` и `CancelTask`.
+
+## Жизненный цикл запроса сообщения
 
 ```mermaid
 sequenceDiagram
@@ -323,7 +340,7 @@ sequenceDiagram
     API->>DB: load profile and conversation
     API->>API: build_message_request()
     API->>DB: save user message
-    API->>A2A: POST JSON-RPC message/send
+    API->>A2A: POST JSON-RPC version-specific method
     A2A-->>API: JSON response
     API->>DB: save http_event
     API->>API: extract_render_items(response)
@@ -336,7 +353,9 @@ sequenceDiagram
 
 Файл: `a2a_tester/a2a/jsonrpc.py`.
 
-`build_message_request()` создаёт payload:
+`build_message_request()` выбирает payload по версии профиля.
+
+Для A2A 0.1-0.3:
 
 ```json
 {
@@ -364,9 +383,30 @@ sequenceDiagram
 
 `taskId` добавляется только если текущая task находится в `input-required`.
 
-## Жизненный цикл `message/stream`
+Для A2A 1.0 отправляется `SendMessage`, а тело сообщения выглядит так:
 
-`message/stream` работает через SSE.
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "...",
+  "method": "SendMessage",
+  "params": {
+    "tenant": "optional-tenant",
+    "message": {
+      "role": "ROLE_USER",
+      "messageId": "...",
+      "parts": [{"text": "...", "mediaType": "text/plain"}],
+      "contextId": "...",
+      "taskId": "..."
+    },
+    "metadata": {}
+  }
+}
+```
+
+## Жизненный цикл потокового запроса
+
+Потоковый метод работает через SSE: это `message/stream` для legacy-версий и `SendStreamingMessage` для A2A 1.0.
 
 ```mermaid
 sequenceDiagram
@@ -377,7 +417,7 @@ sequenceDiagram
 
     UI->>API: POST /api/messages/stream
     API->>DB: save user message
-    API->>A2A: POST JSON-RPC message/stream
+    API->>A2A: POST JSON-RPC version-specific stream method
     A2A-->>API: response headers
     API->>DB: save stream opened diagnostics
     loop for each SSE event
@@ -501,7 +541,7 @@ Transport автоматически добавляет:
 
 Если значение начинается с `http://` или `https://`, оно используется как полный URL. Если начинается с `/`, путь приклеивается к origin основного endpoint. Если указан относительный путь, он приклеивается к основному endpoint как дочерний путь.
 
-В diagnostics для POST-запросов сохраняется не только JSON-RPC body, но и фактический HTTP method/url, чтобы можно было сверять поведение с Insomnia/Postman.
+В diagnostics для POST-запросов сохраняются JSON-RPC body, фактический HTTP method/url и отправленные headers. Секретные headers маскируются, поэтому можно сверять поведение с Insomnia/Postman, включая `A2A-Version`.
 
 ## Metadata
 
@@ -579,7 +619,7 @@ Backend превращает ответ агента в список `RenderItem
 
 Каждый SSE event раскладывается на отдельные `messages` rows сразу во время получения stream. Frontend получает эти сохранённые атомарные строки, а diagnostics остаётся отдельным raw-log.
 
-Для обычного `message/send`, когда агент возвращает финальный Task snapshot, snapshot раскладывается в стабильном порядке:
+Для обычного запроса, когда агент возвращает финальный Task snapshot, snapshot раскладывается в стабильном порядке:
 
 ```text
 history/messages -> artifacts -> status
@@ -603,7 +643,7 @@ Frontend показывает массив событий:
 [
   {
     "createdAt": "...",
-    "method": "message/send",
+    "method": "SendMessage",
     "jsonrpcId": "...",
     "statusCode": 200,
     "latencyMs": 123.4,
@@ -721,7 +761,7 @@ POST /api/tasks/get
 POST /api/tasks/cancel
 ```
 
-Отправляют `tasks/get` или `tasks/cancel`.
+Отправляют `tasks/get`/`tasks/cancel` в legacy-версиях или `GetTask`/`CancelTask` в A2A 1.0.
 
 Ответ task tools не раскладывается в chat-сообщения. Он сохраняется в diagnostics как HTTP exchange и возвращается frontend-у в `taskResult`, который отображается внутри блока «Инструменты задач». Это сделано намеренно: ручная проверка состояния/отмены задачи не является сообщением диалога.
 

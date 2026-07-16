@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import ssl
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urlparse, urlunparse
@@ -11,6 +11,7 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 
 from a2a_tester.a2a.sse import parse_sse_lines
+from a2a_tester.a2a.jsonrpc import normalize_protocol_version
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class A2ARequestConfig:
     client_cert_path: str = ""
     client_key_path: str = ""
     timeout_seconds: float = 60
+    protocol_version: str = "1.0"
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class HttpExchange:
     error: str = ""
     request_url: str = ""
     request_method: str = "POST"
+    request_headers: dict[str, str] = field(default_factory=dict)
 
 
 def _uses_tls(endpoint: str) -> bool:
@@ -75,13 +78,23 @@ def _verify_value(config: A2ARequestConfig) -> bool | ssl.SSLContext:
     return context
 
 
-def _headers(config: A2ARequestConfig, *, stream: bool = False) -> dict[str, str]:
+def _headers(
+    config: A2ARequestConfig,
+    *,
+    stream: bool = False,
+    include_content_type: bool = True,
+) -> dict[str, str]:
     headers = dict(config.headers)
-    headers.setdefault("Content-Type", "application/json")
+    header_names = {name.lower() for name in headers}
+    if "a2a-version" not in header_names:
+        headers["A2A-Version"] = normalize_protocol_version(config.protocol_version)
+    if include_content_type and "content-type" not in header_names:
+        headers["Content-Type"] = "application/json"
     if stream:
-        headers.setdefault("Accept", "text/event-stream")
-    else:
-        headers.setdefault("Accept", "application/json")
+        if "accept" not in header_names:
+            headers["Accept"] = "text/event-stream"
+    elif "accept" not in header_names:
+        headers["Accept"] = "application/json"
     return headers
 
 
@@ -116,13 +129,14 @@ def _network_error(exc: Exception, config: A2ARequestConfig) -> str:
 
 def post_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> HttpExchange:
     started = time.perf_counter()
+    request_headers = _headers(config)
     try:
         with httpx.Client(
             verify=_verify_value(config),
             timeout=_timeout(config),
             trust_env=False,
         ) as client:
-            response = client.post(config.endpoint, json=request_json, headers=_headers(config))
+            response = client.post(config.endpoint, json=request_json, headers=request_headers)
             elapsed = (time.perf_counter() - started) * 1000
             response_headers = dict(response.headers)
             try:
@@ -138,6 +152,7 @@ def post_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> Htt
                 error="" if response.is_success else response.text[:2000],
                 request_url=config.endpoint,
                 request_method="POST",
+                request_headers=request_headers,
             )
     except Exception as exc:
         elapsed = (time.perf_counter() - started) * 1000
@@ -150,11 +165,13 @@ def post_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> Htt
             error=_network_error(exc, config),
             request_url=config.endpoint,
             request_method="POST",
+            request_headers=request_headers,
         )
 
 
 def stream_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> Iterator[dict[str, Any]]:
     started = time.perf_counter()
+    request_headers = _headers(config, stream=True)
     try:
         with httpx.Client(
             verify=_verify_value(config),
@@ -165,7 +182,7 @@ def stream_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> I
                 "POST",
                 config.endpoint,
                 json=request_json,
-                headers=_headers(config, stream=True),
+                headers=request_headers,
             ) as response:
                 elapsed = (time.perf_counter() - started) * 1000
                 yield {
@@ -174,6 +191,7 @@ def stream_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> I
                     "url": config.endpoint,
                     "status_code": response.status_code,
                     "headers": dict(response.headers),
+                    "request_headers": request_headers,
                     "latency_ms": elapsed,
                 }
                 response.raise_for_status()
@@ -203,13 +221,14 @@ def fetch_agent_card(config: A2ARequestConfig, *, url: str | None = None) -> Htt
     url = url or derive_agent_card_url(config.endpoint)
     request_json = {"method": "GET", "url": url}
     started = time.perf_counter()
+    request_headers = _headers(config, include_content_type=False)
     try:
         with httpx.Client(
             verify=_verify_value(config),
             timeout=_timeout(config),
             trust_env=False,
         ) as client:
-            response = client.get(url, headers=config.headers)
+            response = client.get(url, headers=request_headers)
             elapsed = (time.perf_counter() - started) * 1000
             try:
                 payload = response.json()
@@ -224,6 +243,7 @@ def fetch_agent_card(config: A2ARequestConfig, *, url: str | None = None) -> Htt
                 error="" if response.is_success else response.text[:2000],
                 request_url=url,
                 request_method="GET",
+                request_headers=request_headers,
             )
     except Exception as exc:
         elapsed = (time.perf_counter() - started) * 1000
@@ -236,4 +256,5 @@ def fetch_agent_card(config: A2ARequestConfig, *, url: str | None = None) -> Htt
             error=_network_error(exc, config),
             request_url=url,
             request_method="GET",
+            request_headers=request_headers,
         )
