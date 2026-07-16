@@ -926,6 +926,7 @@ details > :last-child {
   --border-strong: rgba(13, 13, 16, 0.34);
   --input: rgba(255, 255, 255, 0.72);
   --input-strong: rgba(255, 255, 255, 0.94);
+  --chat-surface: #f7f9ff;
   --accent: #ef6931;
   --accent-text: #101012;
   --accent-soft: rgba(239, 105, 49, 0.16);
@@ -959,6 +960,7 @@ body[data-theme="graphite"] {
   --border-strong: rgba(255, 255, 255, 0.28);
   --input: rgba(24, 24, 31, 0.78);
   --input-strong: rgba(17, 17, 23, 0.98);
+  --chat-surface: #1d1d27;
   --accent: #ff8150;
   --accent-text: #1a0a04;
   --accent-soft: rgba(255, 129, 80, 0.17);
@@ -991,6 +993,7 @@ body[data-theme="harbor"] {
   --border-strong: rgba(255, 255, 255, 0.28);
   --input: rgba(32, 33, 44, 0.78);
   --input-strong: rgba(27, 28, 38, 0.98);
+  --chat-surface: #23212e;
   --accent: #ff9362;
   --accent-text: #1d0e06;
   --accent-soft: rgba(255, 147, 98, 0.17);
@@ -1441,7 +1444,7 @@ details > :last-child {
   min-height: 420px;
   padding: 14px;
   border-radius: 8px;
-  background: rgba(250, 252, 255, 0.5);
+  background: var(--chat-surface);
 }
 
 .message-row {

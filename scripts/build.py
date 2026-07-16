@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from uv_environment import uv_environment
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def parse_args() -> argparse.Namespace:
@@ -19,15 +25,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    env = os.environ.copy()
-    env.setdefault("PYINSTALLER_CONFIG_DIR", str(Path(".pyinstaller").resolve()))
+    env = uv_environment()
+    env.setdefault("PYINSTALLER_CONFIG_DIR", str(PROJECT_ROOT / ".pyinstaller"))
     data_separator = ";" if sys.platform == "win32" else ":"
-    frontend_data = f"a2a_tester/frontend{data_separator}a2a_tester/frontend"
+    frontend_data = f"{PROJECT_ROOT / 'a2a_tester' / 'frontend'}{data_separator}a2a_tester/frontend"
 
-    command = [
-        sys.executable,
-        "-m",
-        "PyInstaller",
+    pyinstaller_command = [
         "--noconfirm",
         "--clean",
         "--add-data",
@@ -36,13 +39,19 @@ def main() -> int:
         "A2ATester",
     ]
     if args.app:
-        command.append("--windowed")
+        pyinstaller_command.append("--windowed")
     else:
-        command.append("--onefile")
+        pyinstaller_command.append("--onefile")
         if sys.platform != "darwin":
-            command.append("--windowed")
-    command.append("a2a_tester/main.py")
-    return subprocess.call(command, env=env)
+            pyinstaller_command.append("--windowed")
+    pyinstaller_command.append(str(PROJECT_ROOT / "a2a_tester" / "main.py"))
+
+    uv = shutil.which("uv")
+    if uv:
+        command = [uv, "run", "--extra", "build", "python", "-m", "PyInstaller", *pyinstaller_command]
+    else:
+        command = [sys.executable, "-m", "PyInstaller", *pyinstaller_command]
+    return subprocess.call(command, cwd=PROJECT_ROOT, env=env)
 
 
 if __name__ == "__main__":

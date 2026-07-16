@@ -49,10 +49,11 @@ A2A Tester - локальное приложение для тестирован
 
 ## Установка для разработки
 
+Для запуска и сборки используется `uv`. Скрипты ниже создают окружение вне каталога проекта: на macOS это `~/Library/Caches/A2ATester/venv`. Это важно, если рабочая папка находится в `Documents`, iCloud Drive или другой медленной синхронизируемой директории.
+
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements.txt
+brew install uv
+python3 scripts/run_dev.py --smoke-test
 ```
 
 ## Запуск
@@ -60,7 +61,7 @@ python -m pip install -r requirements.txt
 Обычный запуск desktop-приложения:
 
 ```bash
-python -m a2a_tester.main
+python3 scripts/run_dev.py
 ```
 
 На Linux для настоящего desktop-окна нужен GTK (`PyGObject/gi`) или Qt (`qtpy` + `PyQt6`/`PySide6`). Если GUI-backend не установлен, приложение поднимет локальный сервер и откроет системный браузер. Это нормальный fallback, само приложение при этом работает.
@@ -68,19 +69,19 @@ python -m a2a_tester.main
 Portable-режим, где база и данные лежат рядом с приложением в `./data`:
 
 ```bash
-python -m a2a_tester.main --portable
+python3 scripts/run_dev.py --portable
 ```
 
 Запуск только как локального web-сервера без desktop-окна:
 
 ```bash
-python -m a2a_tester.main --host 127.0.0.1 --port 7860 --no-browser
+python3 scripts/run_dev.py --host 127.0.0.1 --port 7860 --no-browser
 ```
 
 Проверка инициализации без запуска сервера:
 
 ```bash
-python -m a2a_tester.main --portable --smoke-test
+python3 scripts/run_dev.py --portable --smoke-test
 ```
 
 ## Сборка
@@ -88,7 +89,7 @@ python -m a2a_tester.main --portable --smoke-test
 Сборка одного исполняемого файла:
 
 ```bash
-python scripts/build.py
+python3 scripts/build.py
 ```
 
 Результат появится здесь:
@@ -112,7 +113,7 @@ dist/A2ATester
 На macOS также можно собрать `.app` bundle:
 
 ```bash
-python scripts/build.py --app
+python3 scripts/build.py --app
 ```
 
 Но для пересылки проще использовать обычный single-file бинарник из `dist/A2ATester`.
@@ -195,6 +196,8 @@ a2a_tester/
     paths.py           # пути к app data
 scripts/
   build.py             # PyInstaller build
+  run_dev.py           # запуск через uv во внешнем virtual environment
+  uv_environment.py    # расположение virtual environment для скриптов
   reset_data.py        # поиск и очистка локальной SQLite/data
 ```
 
