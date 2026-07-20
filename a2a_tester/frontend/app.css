@@ -1369,6 +1369,45 @@ details > :last-child {
   color: var(--text);
 }
 
+#tenantField[hidden] {
+  display: none;
+}
+
+.route-hint {
+  margin-top: 12px;
+  margin-bottom: 10px;
+}
+
+.protocol-contract {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin-bottom: 12px;
+  padding: 0 2px;
+}
+
+.protocol-contract span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.protocol-contract b {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.protocol-contract code {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .file-row {
   grid-template-columns: minmax(0, 1fr) 230px;
   gap: 12px;
@@ -1616,6 +1655,10 @@ body[data-theme="harbor"] .bubble.user .bubble-label {
   .file-row,
   .composer {
     grid-template-columns: 1fr;
+  }
+
+  .protocol-contract {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .wide {

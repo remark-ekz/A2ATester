@@ -33,7 +33,19 @@ const els = {
   tasksCancelRoute: $("tasksCancelRoute"),
   protocolVersion: $("protocolVersion"),
   tenant: $("tenant"),
+  tenantField: $("tenantField"),
   protocolHint: $("protocolHint"),
+  routesSummaryText: $("routesSummaryText"),
+  routesHint: $("routesHint"),
+  protocolTransport: $("protocolTransport"),
+  protocolRole: $("protocolRole"),
+  protocolPart: $("protocolPart"),
+  protocolTenant: $("protocolTenant"),
+  agentCardRouteLabel: $("agentCardRouteLabel"),
+  messageSendRouteLabel: $("messageSendRouteLabel"),
+  messageStreamRouteLabel: $("messageStreamRouteLabel"),
+  tasksGetRouteLabel: $("tasksGetRouteLabel"),
+  tasksCancelRouteLabel: $("tasksCancelRouteLabel"),
   timeoutSeconds: $("timeoutSeconds"),
   tlsVerify: $("tlsVerify"),
   caBundlePath: $("caBundlePath"),
@@ -44,6 +56,9 @@ const els = {
   clientKeyFile: $("clientKeyFile"),
   metadataJson: $("metadataJson"),
   taskId: $("taskId"),
+  taskIdLabel: $("taskIdLabel"),
+  getTask: $("getTaskBtn"),
+  cancelTask: $("cancelTaskBtn"),
   taskResult: $("taskResult"),
   agentCard: $("agentCard"),
   headerRows: $("headerRows"),
@@ -291,16 +306,48 @@ function renderProfileForm() {
   els.clientCertPath.value = profile.clientCertPath || "";
   els.clientKeyPath.value = profile.clientKeyPath || "";
   els.metadataJson.value = profile.metadataJson || "{}";
-  renderProtocolHint();
+  renderProtocolControls();
 }
 
-function renderProtocolHint() {
+function renderProtocolControls() {
   const version = els.protocolVersion.value || "1.0";
-  if (version === "1.0") {
-    els.protocolHint.textContent = "A2A 1.0: SendMessage, SendStreamingMessage, GetTask и CancelTask; заголовок A2A-Version: 1.0 добавляется автоматически.";
-    return;
-  }
-  els.protocolHint.textContent = `A2A ${version}: message/send, message/stream, tasks/get и tasks/cancel; заголовок A2A-Version: ${version} добавляется автоматически.`;
+  const isV1 = version === "1.0";
+  const methods = isV1
+    ? {
+        send: "SendMessage",
+        stream: "SendStreamingMessage",
+        get: "GetTask",
+        cancel: "CancelTask",
+      }
+    : {
+        send: "message/send",
+        stream: "message/stream",
+        get: "tasks/get",
+        cancel: "tasks/cancel",
+      };
+
+  els.tenantField.hidden = !isV1;
+  els.protocolHint.textContent = isV1
+    ? "A2A 1.0: используется роль ROLE_USER, текстовая часть с mediaType и, при необходимости, контур tenant. Заголовок A2A-Version добавляется автоматически."
+    : `A2A ${version}: используется роль user и текстовая часть kind: text. Контур tenant не передается; заголовок A2A-Version добавляется автоматически.`;
+  els.routesSummaryText.textContent = `Ручки запросов A2A ${version}`;
+  els.routesHint.textContent = "Все операции используют JSON-RPC по адресу агента. Оставьте поле пустым, чтобы использовать этот адрес; укажите путь или полный URL только для переопределения конкретной операции.";
+  els.protocolTransport.textContent = "JSON-RPC 2.0";
+  els.protocolRole.textContent = isV1 ? "ROLE_USER" : "user";
+  els.protocolPart.textContent = isV1 ? "text + mediaType" : "kind: text + text";
+  els.protocolTenant.textContent = isV1 ? "params.tenant" : "не передается";
+  els.agentCardRouteLabel.textContent = "Карточка агента (Agent Card)";
+  els.messageSendRouteLabel.textContent = `Отправить сообщение (${methods.send})`;
+  els.messageStreamRouteLabel.textContent = `Поток сообщений (${methods.stream})`;
+  els.tasksGetRouteLabel.textContent = `Получить задачу (${methods.get})`;
+  els.tasksCancelRouteLabel.textContent = `Отменить задачу (${methods.cancel})`;
+  els.messageSendRoute.placeholder = "пусто = адрес агента";
+  els.messageStreamRoute.placeholder = "пусто = адрес агента";
+  els.tasksGetRoute.placeholder = "пусто = адрес агента";
+  els.tasksCancelRoute.placeholder = "пусто = адрес агента";
+  els.taskIdLabel.textContent = `Идентификатор задачи (Task ID) для ${methods.get} / ${methods.cancel}`;
+  els.getTask.textContent = `Получить (${methods.get})`;
+  els.cancelTask.textContent = `Отменить (${methods.cancel})`;
 }
 
 function renderConversations() {
@@ -1083,7 +1130,7 @@ function wireProfileDraftEvents() {
   }
   els.protocolVersion.addEventListener("change", () => {
     syncProfileDraftFromForm();
-    renderProtocolHint();
+    renderProtocolControls();
   });
   els.tlsVerify.addEventListener("change", syncProfileDraftFromForm);
 }

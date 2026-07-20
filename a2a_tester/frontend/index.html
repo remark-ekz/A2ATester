@@ -61,7 +61,7 @@
                 <input id="profileName" type="text" />
               </label>
               <label class="wide">
-                <span>Адрес агента</span>
+                <span>Адрес агента (JSON-RPC)</span>
                 <input id="endpoint" type="url" />
               </label>
               <label>
@@ -73,9 +73,9 @@
                   <option value="0.1">0.1</option>
                 </select>
               </label>
-              <label class="wide">
-                <span>Контур (tenant) A2A 1.0</span>
-                <input id="tenant" type="text" placeholder="Только если указан в Agent Card" />
+              <label id="tenantField" class="wide">
+                <span>Контур (tenant)</span>
+                <input id="tenant" type="text" placeholder="Только для A2A 1.0, если его требует агент" />
               </label>
               <label>
                 <span>Таймаут, секунды</span>
@@ -88,26 +88,33 @@
           </details>
 
           <details>
-            <summary>Ручки запросов</summary>
+            <summary><span id="routesSummaryText">Ручки запросов</span></summary>
+            <p id="routesHint" class="protocol-hint route-hint" aria-live="polite"></p>
+            <div id="protocolContract" class="protocol-contract" aria-label="Контракт запроса">
+              <span><b>Транспорт</b><code id="protocolTransport"></code></span>
+              <span><b>Роль клиента</b><code id="protocolRole"></code></span>
+              <span><b>Текстовая часть</b><code id="protocolPart"></code></span>
+              <span><b>Контур</b><code id="protocolTenant"></code></span>
+            </div>
             <div class="routes-grid">
               <label>
-                <span>Карточка агента</span>
+                <span id="agentCardRouteLabel">Карточка агента</span>
                 <input id="agentCardRoute" type="text" placeholder="/.well-known/agent-card.json" />
               </label>
               <label>
-                <span>Обычный запрос сообщения</span>
+                <span id="messageSendRouteLabel">Обычный запрос сообщения</span>
                 <input id="messageSendRoute" type="text" placeholder="по умолчанию: Host / A2A endpoint" />
               </label>
               <label>
-                <span>Поток сообщений</span>
+                <span id="messageStreamRouteLabel">Поток сообщений</span>
                 <input id="messageStreamRoute" type="text" placeholder="по умолчанию: Host / A2A endpoint" />
               </label>
               <label>
-                <span>Получение задачи</span>
+                <span id="tasksGetRouteLabel">Получение задачи</span>
                 <input id="tasksGetRoute" type="text" placeholder="по умолчанию: Host / A2A endpoint" />
               </label>
               <label>
-                <span>Отмена задачи</span>
+                <span id="tasksCancelRouteLabel">Отмена задачи</span>
                 <input id="tasksCancelRoute" type="text" placeholder="по умолчанию: Host / A2A endpoint" />
               </label>
             </div>
@@ -180,7 +187,7 @@
             <summary>Инструменты задач</summary>
             <div class="task-tools">
               <label class="wide">
-                <span>Идентификатор задачи (Task ID)</span>
+                <span id="taskIdLabel">Идентификатор задачи (Task ID)</span>
                 <input id="taskId" type="text" />
               </label>
               <button id="getTaskBtn" class="ghost">Получить задачу</button>
