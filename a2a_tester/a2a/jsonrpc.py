@@ -50,7 +50,8 @@ def new_jsonrpc_id() -> str:
 def build_message_request(
     *,
     method: str,
-    text: str,
+    text: str = "",
+    parts: list[dict[str, Any]] | None = None,
     context_id: str = "",
     task_id: str = "",
     metadata: dict[str, Any] | None = None,
@@ -59,14 +60,15 @@ def build_message_request(
     jsonrpc_id: str | None = None,
 ) -> dict[str, Any]:
     version_is_v1 = is_v1(protocol_version)
+    message_parts = build_message_parts(
+        text=text,
+        parts=parts,
+        protocol_version=protocol_version,
+    )
     message: dict[str, Any] = {
         "role": "ROLE_USER" if version_is_v1 else "user",
         "messageId": str(uuid.uuid4()),
-        "parts": [
-            {"text": text, "mediaType": "text/plain"}
-            if version_is_v1
-            else {"kind": "text", "text": text}
-        ],
+        "parts": message_parts,
     }
     if not version_is_v1:
         message["kind"] = "message"
@@ -87,6 +89,60 @@ def build_message_request(
         "method": method,
         "params": params,
     }
+
+
+def build_message_parts(
+    *,
+    text: str = "",
+    parts: list[dict[str, Any]] | None = None,
+    protocol_version: str = "1.0",
+) -> list[dict[str, Any]]:
+    """Build protocol-specific message parts from the tester's neutral format."""
+    source_parts = parts if parts is not None else [{"type": "text", "text": text}]
+    version_is_v1 = is_v1(protocol_version)
+    built: list[dict[str, Any]] = []
+
+    for source in source_parts:
+        if not isinstance(source, dict):
+            raise ValueError("Each message part must be an object")
+        part_type = str(source.get("type") or "").strip().lower()
+
+        if part_type == "text":
+            value = str(source.get("text") or "")
+            if not value:
+                continue
+            built.append({"text": value, "mediaType": "text/plain"} if version_is_v1 else {"kind": "text", "text": value})
+            continue
+
+        if part_type == "data":
+            data = source.get("data")
+            if not isinstance(data, dict):
+                raise ValueError("JSON data part must contain an object")
+            built.append({"data": data, "mediaType": "application/json"} if version_is_v1 else {"kind": "data", "data": data})
+            continue
+
+        if part_type == "file":
+            filename = str(source.get("filename") or "file").strip() or "file"
+            media_type = str(source.get("mediaType") or "application/octet-stream").strip() or "application/octet-stream"
+            content = str(source.get("contentBase64") or "")
+            if not content:
+                raise ValueError(f"File content is missing: {filename}")
+            if version_is_v1:
+                built.append({"raw": content, "filename": filename, "mediaType": media_type})
+            else:
+                built.append(
+                    {
+                        "kind": "file",
+                        "file": {"bytes": content, "name": filename, "mimeType": media_type},
+                    }
+                )
+            continue
+
+        raise ValueError(f"Unsupported message part type: {part_type or 'unknown'}")
+
+    if not built:
+        raise ValueError("Message is empty")
+    return built
 
 
 def build_task_request(

@@ -201,7 +201,16 @@
         <section class="chat-pane" id="chatPane"></section>
 
         <section class="composer">
-          <textarea id="messageInput" placeholder="Напишите сообщение агенту"></textarea>
+          <div class="composer-editor">
+            <div id="composerParts" class="composer-parts" aria-label="Части сообщения"></div>
+            <div class="composer-toolbar">
+              <button id="addTextPartBtn" class="icon-button" type="button" title="Добавить текстовую часть">T</button>
+              <button id="addDataPartBtn" class="icon-button" type="button" title="Добавить данные JSON">{ }</button>
+              <button id="addFilePartBtn" class="ghost composer-file-button" type="button">Файл +</button>
+              <input id="messageFileInput" class="composer-file-input" type="file" multiple />
+              <span class="composer-limit">Файл до 8 МБ</span>
+            </div>
+          </div>
           <div class="composer-actions">
             <button id="sendBtn" class="primary">Отправить</button>
             <button id="streamBtn" class="ghost">Поток</button>

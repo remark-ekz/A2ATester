@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import shutil
@@ -10,15 +11,15 @@ import time
 import webbrowser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from a2a_tester.a2a.client import A2ARequestConfig, HttpExchange, derive_agent_card_url, fetch_agent_card, post_json_rpc, stream_json_rpc
+from a2a_tester.a2a.client import A2ARequestConfig, HttpExchange, derive_agent_card_url, fetch_agent_card, fetch_file, post_json_rpc, stream_json_rpc
 from a2a_tester.a2a.jsonrpc import (
     build_message_request,
     build_task_request,
@@ -26,7 +27,7 @@ from a2a_tester.a2a.jsonrpc import (
     normalize_protocol_version,
     task_method,
 )
-from a2a_tester.a2a.render import RenderItem, extract_context_id, extract_render_items, pretty_json
+from a2a_tester.a2a.render import RenderItem, extract_context_id, extract_render_items, parts_to_text, pretty_json
 from a2a_tester.ids import new_uuidv7
 from a2a_tester.storage.database import Database, Profile, loads
 
@@ -34,6 +35,7 @@ from a2a_tester.storage.database import Database, Profile, loads
 SECRET_HEADER_NAMES = {"authorization", "cookie", "x-api-key", "api-key", "proxy-authorization"}
 INPUT_REQUIRED_STATES = {"input-required", "input_required", "task_state_input_required"}
 CERTIFICATE_UPLOAD_LIMIT_BYTES = 2 * 1024 * 1024
+INLINE_FILE_LIMIT_BYTES = 8 * 1024 * 1024
 DEFAULT_CHAT_LIST_LIMIT = 20
 MIN_CHAT_LIST_LIMIT = 1
 MAX_CHAT_LIST_LIMIT = 200
@@ -201,6 +203,56 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
         )
         return {"path": str(destination), "profile": profile_payload(db.get_profile(profile_id))}
 
+    @app.post("/api/files/read")
+    async def read_remote_file(payload: dict[str, Any]) -> Response:
+        profile_id = int(payload.get("profileId") or 0)
+        conversation_id = int(payload.get("conversationId") or 0)
+        url = str(payload.get("url") or "").strip()
+        requested_name = Path(str(payload.get("filename") or "file")).name or "file"
+        parsed_url = urlparse(url)
+        if not profile_id or not conversation_id:
+            raise HTTPException(status_code=400, detail="profileId and conversationId are required")
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            raise HTTPException(status_code=400, detail="File URL must use http or https")
+
+        profile = db.get_profile(profile_id)
+        download_config = (
+            profile_config(profile, endpoint=url)
+            if same_origin(profile.endpoint, url)
+            else A2ARequestConfig(endpoint=url, headers={}, protocol_version=profile.protocol_version)
+        )
+        download = await run_in_threadpool(
+            fetch_file,
+            download_config,
+            url=url,
+            max_bytes=INLINE_FILE_LIMIT_BYTES,
+        )
+        filename = Path(download.filename if download.filename != "file" else requested_name).name or "file"
+        db.add_http_event(
+            conversation_id=conversation_id,
+            profile_id=profile_id,
+            method="file/read",
+            request_json=diagnostic_request(
+                {"method": "GET", "url": url},
+                url,
+                "GET",
+                download.request_headers,
+            ),
+            response_json={"filename": filename, "mediaType": download.media_type, "size": len(download.content)},
+            response_headers_json=redact_headers(download.response_headers),
+            status_code=download.status_code,
+            latency_ms=download.latency_ms,
+            error=download.error,
+        )
+        if download.error:
+            raise HTTPException(status_code=502, detail=f"Не удалось прочитать файл: {download.error}")
+
+        return Response(
+            content=download.content,
+            media_type=download.media_type,
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+        )
+
     @app.post("/api/conversations")
     async def create_conversation(payload: dict[str, Any]) -> dict[str, Any]:
         profile_id = int(payload.get("profileId") or 0)
@@ -239,20 +291,30 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
 
     @app.post("/api/messages/send")
     async def send_message(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
-        profile_id, conversation_id, text = request_ids_and_text(payload)
+        profile_id, conversation_id, parts = request_ids_and_parts(payload)
         profile = db.get_profile(profile_id)
         conversation = ensure_conversation_context(db, conversation_id)
         method = message_method(profile.protocol_version)
-        request_json = build_message_request(
-            method=method,
-            text=text,
-            context_id=conversation.context_id,
-            task_id=continuation_task_for_input_required(db, conversation_id),
-            metadata=parse_metadata(profile.metadata_json),
-            protocol_version=profile.protocol_version,
-            tenant=profile.tenant,
+        try:
+            request_json = build_message_request(
+                method=method,
+                parts=parts,
+                context_id=conversation.context_id,
+                task_id=continuation_task_for_input_required(db, conversation_id),
+                metadata=parse_metadata(profile.metadata_json),
+                protocol_version=profile.protocol_version,
+                tenant=profile.tenant,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        user_message = request_json["params"]["message"]
+        db.add_message(
+            conversation_id=conversation_id,
+            role="user",
+            kind="message",
+            text=parts_to_text(user_message["parts"]),
+            raw_json=user_message,
         )
-        db.add_message(conversation_id=conversation_id, role="user", kind="message", text=text, raw_json=request_json["params"]["message"])
         exchange = await run_in_threadpool(
             post_json_rpc,
             profile_config(profile, endpoint=operation_endpoint(profile, "message_send", profile.endpoint)),
@@ -270,20 +332,30 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
 
     @app.post("/api/messages/stream")
     async def stream_message(payload: dict[str, Any]) -> StreamingResponse:
-        profile_id, conversation_id, text = request_ids_and_text(payload)
+        profile_id, conversation_id, parts = request_ids_and_parts(payload)
         profile = db.get_profile(profile_id)
         conversation = ensure_conversation_context(db, conversation_id)
         method = message_method(profile.protocol_version, stream=True)
-        request_json = build_message_request(
-            method=method,
-            text=text,
-            context_id=conversation.context_id,
-            task_id=continuation_task_for_input_required(db, conversation_id),
-            metadata=parse_metadata(profile.metadata_json),
-            protocol_version=profile.protocol_version,
-            tenant=profile.tenant,
+        try:
+            request_json = build_message_request(
+                method=method,
+                parts=parts,
+                context_id=conversation.context_id,
+                task_id=continuation_task_for_input_required(db, conversation_id),
+                metadata=parse_metadata(profile.metadata_json),
+                protocol_version=profile.protocol_version,
+                tenant=profile.tenant,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        user_message = request_json["params"]["message"]
+        db.add_message(
+            conversation_id=conversation_id,
+            role="user",
+            kind="message",
+            text=parts_to_text(user_message["parts"]),
+            raw_json=user_message,
         )
-        db.add_message(conversation_id=conversation_id, role="user", kind="message", text=text, raw_json=request_json["params"]["message"])
         stream_endpoint = operation_endpoint(profile, "message_stream", profile.endpoint)
 
         def events():
@@ -654,15 +726,62 @@ def profile_config(profile: Profile, *, endpoint: str | None = None) -> A2AReque
     )
 
 
-def request_ids_and_text(payload: dict[str, Any]) -> tuple[int, int, str]:
+def request_ids_and_parts(payload: dict[str, Any]) -> tuple[int, int, list[dict[str, Any]]]:
     profile_id = int(payload.get("profileId") or 0)
     conversation_id = int(payload.get("conversationId") or 0)
-    text = str(payload.get("text") or "").strip()
     if not profile_id or not conversation_id:
         raise HTTPException(status_code=400, detail="profileId and conversationId are required")
-    if not text:
+    parts = payload.get("parts")
+    if not isinstance(parts, list):
+        raise HTTPException(status_code=400, detail="Message parts must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    for index, raw_part in enumerate(parts, start=1):
+        if not isinstance(raw_part, dict):
+            raise HTTPException(status_code=400, detail=f"Part {index} must be an object")
+        part_type = str(raw_part.get("type") or "").strip().lower()
+
+        if part_type == "text":
+            text = str(raw_part.get("text") or "")
+            if text:
+                normalized.append({"type": "text", "text": text})
+            continue
+
+        if part_type == "data":
+            data = raw_part.get("data")
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=400, detail=f"JSON data in part {index} must be an object")
+            normalized.append({"type": "data", "data": data})
+            continue
+
+        if part_type == "file":
+            filename = Path(str(raw_part.get("filename") or "file")).name or "file"
+            media_type = str(raw_part.get("mediaType") or "application/octet-stream").strip() or "application/octet-stream"
+            content_base64 = str(raw_part.get("contentBase64") or "")
+            try:
+                content = base64.b64decode(content_base64, validate=True)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"File part {index} is not valid base64") from exc
+            if not content:
+                raise HTTPException(status_code=400, detail=f"File part {index} is empty")
+            if len(content) > INLINE_FILE_LIMIT_BYTES:
+                limit_mb = INLINE_FILE_LIMIT_BYTES // (1024 * 1024)
+                raise HTTPException(status_code=400, detail=f"File part {index} is larger than {limit_mb} MB")
+            normalized.append(
+                {
+                    "type": "file",
+                    "filename": filename,
+                    "mediaType": media_type,
+                    "contentBase64": content_base64,
+                }
+            )
+            continue
+
+        raise HTTPException(status_code=400, detail=f"Unsupported message part type in part {index}")
+
+    if not normalized:
         raise HTTPException(status_code=400, detail="Message is empty")
-    return profile_id, conversation_id, text
+    return profile_id, conversation_id, normalized
 
 
 def persist_exchange(db: Database, conversation_id: int | None, profile_id: int | None, exchange: HttpExchange, method: str) -> None:
@@ -830,6 +949,12 @@ def resolve_route_url(base_endpoint: str, route: str, default_url: str) -> str:
         origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
         return urljoin(origin, route)
     return urljoin(base.rstrip("/") + "/", route)
+
+
+def same_origin(first_url: str, second_url: str) -> bool:
+    first = urlparse(str(first_url or ""))
+    second = urlparse(str(second_url or ""))
+    return bool(first.scheme and first.netloc and first.scheme == second.scheme and first.netloc == second.netloc)
 
 
 def diagnostic_request(

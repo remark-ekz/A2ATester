@@ -13,6 +13,8 @@ const state = {
   busyStartedAt: 0,
   busyTimer: null,
   currentAbortController: null,
+  composerParts: [],
+  nextComposerPartId: 1,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -64,7 +66,8 @@ const els = {
   headerRows: $("headerRows"),
   conversationMeta: $("conversationMeta"),
   chatPane: $("chatPane"),
-  messageInput: $("messageInput"),
+  composerParts: $("composerParts"),
+  messageFileInput: $("messageFileInput"),
   diagnostics: $("diagnostics"),
   stopRequest: $("stopRequestBtn"),
 };
@@ -131,6 +134,10 @@ function setBusy(busy, label = "Ждем ответ") {
   for (const button of document.querySelectorAll(".chat-delete, .header-save, .header-delete")) {
     button.disabled = busy;
   }
+  for (const element of document.querySelectorAll(".composer-toolbar button, .composer-part-controls button, .composer-part textarea")) {
+    element.disabled = busy;
+  }
+  if (els.messageFileInput) els.messageFileInput.disabled = busy;
   if (busy) {
     startBusyTimer(label);
   } else {
@@ -405,13 +412,13 @@ function renderConversation() {
   if (!conversation.messages?.length) {
     els.chatPane.innerHTML = '<div class="empty-chat">Сообщений пока нет.</div>';
   } else {
-    els.chatPane.innerHTML = conversation.messages.map(renderMessage).join("");
+    els.chatPane.innerHTML = conversation.messages.map((message, index) => renderMessage(message, index)).join("");
     els.chatPane.scrollTop = els.chatPane.scrollHeight;
   }
   els.diagnostics.textContent = JSON.stringify(conversation.diagnostics || [], null, 2);
 }
 
-function renderMessage(message) {
+function renderMessage(message, messageIndex) {
   const side = message.role === "user" ? "right" : "left";
   const kind = bubbleKind(message);
   const label = messageLabel(message);
@@ -419,10 +426,130 @@ function renderMessage(message) {
     <div class="message-row ${side}">
       <div class="bubble ${kind}">
         <div class="bubble-label">${escapeHtml(label)}</div>
-        <div class="markdown-body">${renderMarkdown(message.text || "")}</div>
+        <div class="message-parts">${renderMessageParts(message, messageIndex)}</div>
       </div>
     </div>
   `;
+}
+
+function renderMessageParts(message, messageIndex) {
+  const parts = Array.isArray(message.raw?.parts) ? message.raw.parts : [];
+  if (!parts.length) {
+    return `<div class="markdown-body">${renderMarkdown(message.text || "")}</div>`;
+  }
+  return parts.map((part, partIndex) => renderProtocolPart(part, messageIndex, partIndex)).join("");
+}
+
+function renderProtocolPart(part, messageIndex, partIndex) {
+  if (!part || typeof part !== "object") {
+    return `<pre class="part-unknown">${escapeHtml(JSON.stringify(part, null, 2))}</pre>`;
+  }
+  if (Object.hasOwn(part, "text")) {
+    return `<div class="markdown-body">${renderMarkdown(part.text || "")}</div>`;
+  }
+  if (Object.hasOwn(part, "data")) {
+    const data = part.data;
+    const itemCount = Array.isArray(data) ? data.length : Object.keys(data || {}).length;
+    return `
+      <details class="data-part">
+        <summary><span>Данные JSON</span><small>${itemCount} ${declension(itemCount, "поле", "поля", "полей")}</small></summary>
+        <div class="data-part-body">
+          <button class="part-copy" type="button" data-message-index="${messageIndex}" data-part-index="${partIndex}">Копировать JSON</button>
+          <pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>
+        </div>
+      </details>
+    `;
+  }
+  const file = fileDescriptor(part);
+  if (file) {
+    return renderFilePart(file, messageIndex, partIndex);
+  }
+  return `<pre class="part-unknown">${escapeHtml(JSON.stringify(part, null, 2))}</pre>`;
+}
+
+function fileDescriptor(part) {
+  if (typeof part.raw === "string") {
+    return {
+      filename: String(part.filename || "file"),
+      mediaType: String(part.mediaType || "application/octet-stream"),
+      contentBase64: part.raw,
+      url: "",
+    };
+  }
+  if (typeof part.url === "string") {
+    return {
+      filename: String(part.filename || filenameFromUrl(part.url) || "file"),
+      mediaType: String(part.mediaType || "application/octet-stream"),
+      contentBase64: "",
+      url: part.url,
+    };
+  }
+  if (part.file && typeof part.file === "object") {
+    const source = part.file;
+    return {
+      filename: String(source.name || part.filename || filenameFromUrl(source.uri || source.fileWithUri || "") || "file"),
+      mediaType: String(source.mimeType || part.mediaType || "application/octet-stream"),
+      contentBase64: String(source.bytes || source.fileWithBytes || ""),
+      url: String(source.uri || source.fileWithUri || ""),
+    };
+  }
+  return null;
+}
+
+function renderFilePart(file, messageIndex, partIndex) {
+  const isInline = Boolean(file.contentBase64);
+  const safeUrl = file.url ? safeFileUrl(file.url) : "";
+  const preview = isInline && file.contentBase64.length <= 2 * 1024 * 1024 && isPreviewableImage(file.mediaType)
+    ? `<img class="file-preview" src="data:${escapeAttribute(file.mediaType)};base64,${escapeAttribute(file.contentBase64)}" alt="${escapeAttribute(file.filename)}" />`
+    : "";
+  const actions = [
+    isInline
+      ? `<button class="part-download" type="button" data-message-index="${messageIndex}" data-part-index="${partIndex}">Скачать</button>`
+      : "",
+    safeUrl ? `<a class="file-open" href="${escapeAttribute(safeUrl)}" target="_blank" rel="noopener noreferrer">Открыть</a>` : "",
+    safeUrl
+      ? `<button class="part-fetch" type="button" data-message-index="${messageIndex}" data-part-index="${partIndex}">Скачать через приложение</button>`
+      : "",
+  ].filter(Boolean).join("");
+  return `
+    <div class="file-part">
+      <div class="file-part-head"><strong>${escapeHtml(file.filename)}</strong><span>${escapeHtml(file.mediaType)}</span></div>
+      ${preview}
+      <div class="file-part-actions">${actions}</div>
+    </div>
+  `;
+}
+
+function safeFileUrl(value) {
+  try {
+    const url = new URL(String(value));
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function filenameFromUrl(value) {
+  try {
+    const pathname = new URL(String(value)).pathname;
+    const filename = pathname.split("/").filter(Boolean).at(-1);
+    return filename ? decodeURIComponent(filename) : "";
+  } catch {
+    return "";
+  }
+}
+
+function isPreviewableImage(mediaType) {
+  return ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(String(mediaType).toLowerCase());
+}
+
+function declension(number, one, few, many) {
+  const value = Math.abs(Number(number) || 0) % 100;
+  const tail = value % 10;
+  if (value > 10 && value < 20) return many;
+  if (tail > 1 && tail < 5) return few;
+  if (tail === 1) return one;
+  return many;
 }
 
 function renderMarkdown(value) {
@@ -897,14 +1024,187 @@ async function updateChatListLimit() {
   }
 }
 
+function newComposerPart(type, values = {}) {
+  const id = state.nextComposerPartId++;
+  if (type === "data") {
+    return { id, type, value: values.value ?? "{\n  \n}", error: "" };
+  }
+  if (type === "file") {
+    return { id, type, file: values.file, error: "" };
+  }
+  return { id, type: "text", value: values.value ?? "", error: "" };
+}
+
+function resetComposer() {
+  state.composerParts = [newComposerPart("text")];
+  renderComposer();
+}
+
+function renderComposer() {
+  if (!els.composerParts) return;
+  els.composerParts.innerHTML = state.composerParts.map(renderComposerPart).join("");
+  for (const input of els.composerParts.querySelectorAll(".composer-part-input")) {
+    input.addEventListener("input", () => updateComposerPartValue(Number(input.dataset.partId), input.value));
+    input.addEventListener("keydown", (event) => {
+      if (input.dataset.partType !== "text" || event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+      event.preventDefault();
+      if (!state.busy) sendMessage(false);
+    });
+  }
+  for (const button of els.composerParts.querySelectorAll("[data-composer-action]")) {
+    button.addEventListener("click", () => handleComposerAction(button.dataset.composerAction, Number(button.dataset.partId)));
+  }
+}
+
+function renderComposerPart(part, index) {
+  const controls = `
+    <div class="composer-part-controls">
+      <button type="button" class="icon-button" title="Переместить выше" data-composer-action="up" data-part-id="${part.id}" ${index === 0 ? "disabled" : ""}>↑</button>
+      <button type="button" class="icon-button" title="Переместить ниже" data-composer-action="down" data-part-id="${part.id}" ${index === state.composerParts.length - 1 ? "disabled" : ""}>↓</button>
+      <button type="button" class="icon-button danger" title="Удалить часть" data-composer-action="remove" data-part-id="${part.id}">×</button>
+    </div>
+  `;
+  if (part.type === "data") {
+    return `
+      <div class="composer-part composer-data-part" data-part-id="${part.id}">
+        <div class="composer-part-head"><span>Данные JSON</span>${controls}</div>
+        <textarea class="composer-part-input code-input" data-part-id="${part.id}" data-part-type="data" spellcheck="false" placeholder="{ }">${escapeHtml(part.value || "")}</textarea>
+        ${part.error ? `<span class="composer-part-error">${escapeHtml(part.error)}</span>` : ""}
+      </div>
+    `;
+  }
+  if (part.type === "file") {
+    const file = part.file;
+    const size = file ? formatFileSize(file.size) : "";
+    return `
+      <div class="composer-part composer-file-part" data-part-id="${part.id}">
+        <div class="composer-part-head"><span>Файл</span>${controls}</div>
+        <div class="composer-file-summary"><strong>${escapeHtml(file?.name || "Файл не выбран")}</strong><span>${escapeHtml([file?.type || "application/octet-stream", size].filter(Boolean).join(" · "))}</span></div>
+        ${part.error ? `<span class="composer-part-error">${escapeHtml(part.error)}</span>` : ""}
+      </div>
+    `;
+  }
+  return `
+    <div class="composer-part composer-text-part" data-part-id="${part.id}">
+      <div class="composer-part-head"><span>Текст</span>${controls}</div>
+      <textarea class="composer-part-input" data-part-id="${part.id}" data-part-type="text" placeholder="Напишите сообщение агенту">${escapeHtml(part.value || "")}</textarea>
+    </div>
+  `;
+}
+
+function updateComposerPartValue(partId, value) {
+  const part = state.composerParts.find((item) => item.id === partId);
+  if (!part) return;
+  part.value = value;
+  part.error = "";
+}
+
+function handleComposerAction(action, partId) {
+  const index = state.composerParts.findIndex((part) => part.id === partId);
+  if (index < 0) return;
+  if (action === "remove") {
+    state.composerParts.splice(index, 1);
+    if (!state.composerParts.length) state.composerParts.push(newComposerPart("text"));
+  } else if (action === "up" && index > 0) {
+    [state.composerParts[index - 1], state.composerParts[index]] = [state.composerParts[index], state.composerParts[index - 1]];
+  } else if (action === "down" && index < state.composerParts.length - 1) {
+    [state.composerParts[index + 1], state.composerParts[index]] = [state.composerParts[index], state.composerParts[index + 1]];
+  }
+  renderComposer();
+}
+
+function addComposerPart(type) {
+  state.composerParts.push(newComposerPart(type));
+  renderComposer();
+  const selector = type === "data" ? ".composer-data-part textarea" : ".composer-text-part textarea";
+  els.composerParts.querySelectorAll(selector).at(-1)?.focus();
+}
+
+function addComposerFiles(files) {
+  for (const file of Array.from(files || [])) {
+    if (file.size > 8 * 1024 * 1024) {
+      setStatus(`Файл ${file.name} больше 8 МБ`);
+      continue;
+    }
+    state.composerParts.push(newComposerPart("file", { file }));
+  }
+  renderComposer();
+}
+
+async function outgoingMessageParts() {
+  const result = [];
+  let hasError = false;
+  for (const part of state.composerParts) {
+    part.error = "";
+    if (part.type === "text") {
+      if (part.value) result.push({ type: "text", text: part.value });
+      continue;
+    }
+    if (part.type === "data") {
+      if (!part.value.trim()) continue;
+      try {
+        const data = JSON.parse(part.value);
+        if (!data || Array.isArray(data) || typeof data !== "object") {
+          throw new Error("данные должны быть объектом JSON");
+        }
+        result.push({ type: "data", data });
+      } catch (error) {
+        part.error = `JSON: ${error.message}`;
+        hasError = true;
+      }
+      continue;
+    }
+    if (part.type === "file") {
+      if (!part.file) {
+        part.error = "Файл не выбран";
+        hasError = true;
+        continue;
+      }
+      result.push({
+        type: "file",
+        filename: part.file.name,
+        mediaType: part.file.type || "application/octet-stream",
+        contentBase64: await fileToBase64(part.file),
+      });
+    }
+  }
+  if (hasError) {
+    renderComposer();
+    throw new Error("Исправьте данные JSON перед отправкой");
+  }
+  if (!result.length) throw new Error("Добавьте текст, данные JSON или файл");
+  return result;
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Не удалось прочитать файл ${file.name}`));
+    reader.onload = () => resolve(String(reader.result || "").split(",", 2)[1] || "");
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatFileSize(value) {
+  const bytes = Number(value) || 0;
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
 async function sendMessage(stream = false) {
-  const text = els.messageInput.value.trim();
-  if (!text) return;
+  let parts;
+  try {
+    parts = await outgoingMessageParts();
+  } catch (error) {
+    setStatus(error.message);
+    return;
+  }
   const controller = beginCancelableRequest(stream ? "Ждем stream-ответ" : "Ждем ответ");
   try {
     await saveProfile(false);
     if (stream) {
-      await streamRequest(text, controller.signal);
+      await streamRequest(parts, controller.signal);
     } else {
       const data = await api("/api/messages/send", {
         method: "POST",
@@ -912,12 +1212,12 @@ async function sendMessage(stream = false) {
         body: JSON.stringify({
           profileId: state.selectedProfileId,
           conversationId: state.selectedConversationId,
-          text,
+          parts,
         }),
       });
       applyConversationUpdate(data);
     }
-    els.messageInput.value = "";
+    resetComposer();
   } catch (error) {
     setStatus(isAbortError(error) ? "Вызов остановлен пользователем" : error.message);
   } finally {
@@ -925,7 +1225,7 @@ async function sendMessage(stream = false) {
   }
 }
 
-async function streamRequest(text, signal) {
+async function streamRequest(parts, signal) {
   const response = await fetch("/api/messages/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -933,7 +1233,7 @@ async function streamRequest(text, signal) {
     body: JSON.stringify({
       profileId: state.selectedProfileId,
       conversationId: state.selectedConversationId,
-      text,
+      parts,
     }),
   });
   if (!response.ok || !response.body) {
@@ -1056,6 +1356,106 @@ async function pickCertificatePath(fieldName, targetInput) {
   setStatus("Desktop-диалог недоступен. Вставьте абсолютный путь или используйте импорт копии.");
 }
 
+function conversationPart(messageIndex, partIndex) {
+  const message = state.conversation?.messages?.[messageIndex];
+  const parts = message?.raw?.parts;
+  return Array.isArray(parts) ? parts[partIndex] : null;
+}
+
+async function copyJsonPart(messageIndex, partIndex) {
+  const part = conversationPart(messageIndex, partIndex);
+  if (!part || !Object.hasOwn(part, "data")) return;
+  const text = JSON.stringify(part.data, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+    setStatus("JSON скопирован");
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    document.body.append(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+    setStatus("JSON скопирован");
+  }
+}
+
+function downloadInlinePart(messageIndex, partIndex) {
+  const part = conversationPart(messageIndex, partIndex);
+  const file = part && fileDescriptor(part);
+  if (!file?.contentBase64) return;
+  try {
+    const binary = atob(file.contentBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    downloadBlob(new Blob([bytes], { type: file.mediaType }), file.filename);
+    setStatus(`Файл ${file.filename} скачан`);
+  } catch {
+    setStatus("Не удалось прочитать base64 файла");
+  }
+}
+
+function downloadBlob(blob, filename) {
+  const link = document.createElement("a");
+  const objectUrl = URL.createObjectURL(blob);
+  link.href = objectUrl;
+  link.download = filename || "file";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+async function downloadRemotePart(messageIndex, partIndex) {
+  const part = conversationPart(messageIndex, partIndex);
+  const file = part && fileDescriptor(part);
+  if (!file?.url || !safeFileUrl(file.url)) return;
+  const controller = beginCancelableRequest("Загружаем файл");
+  try {
+    const response = await fetch("/api/files/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        profileId: state.selectedProfileId,
+        conversationId: state.selectedConversationId,
+        url: file.url,
+        filename: file.filename,
+      }),
+    });
+    if (!response.ok) {
+      let detail = response.statusText;
+      try {
+        detail = (await response.json()).detail || detail;
+      } catch {
+        detail = await response.text();
+      }
+      throw new Error(detail);
+    }
+    downloadBlob(await response.blob(), file.filename);
+    const data = await api(`/api/conversations/${state.selectedConversationId}`);
+    state.conversation = data.conversation;
+    renderConversation();
+    setStatus(`Файл ${file.filename} скачан`);
+  } catch (error) {
+    setStatus(isAbortError(error) ? "Вызов остановлен пользователем" : error.message);
+  } finally {
+    finishCancelableRequest(controller);
+  }
+}
+
+function wireChatPartEvents() {
+  els.chatPane.addEventListener("click", (event) => {
+    const action = event.target.closest(".part-copy, .part-download, .part-fetch");
+    if (!action) return;
+    const messageIndex = Number(action.dataset.messageIndex);
+    const partIndex = Number(action.dataset.partIndex);
+    if (action.classList.contains("part-copy")) copyJsonPart(messageIndex, partIndex);
+    if (action.classList.contains("part-download")) downloadInlinePart(messageIndex, partIndex);
+    if (action.classList.contains("part-fetch")) downloadRemotePart(messageIndex, partIndex);
+  });
+}
+
 function wireEvents() {
   $("newProfileBtn").addEventListener("click", newProfile);
   $("saveProfileBtn").addEventListener("click", () => saveProfile(true).catch((error) => setStatus(error.message)));
@@ -1068,6 +1468,13 @@ function wireEvents() {
   $("getTaskBtn").addEventListener("click", () => taskRequest("get"));
   $("cancelTaskBtn").addEventListener("click", () => taskRequest("cancel"));
   $("addHeaderBtn").addEventListener("click", addHeaderRow);
+  $("addTextPartBtn").addEventListener("click", () => addComposerPart("text"));
+  $("addDataPartBtn").addEventListener("click", () => addComposerPart("data"));
+  $("addFilePartBtn").addEventListener("click", () => els.messageFileInput.click());
+  els.messageFileInput.addEventListener("change", () => {
+    addComposerFiles(els.messageFileInput.files);
+    els.messageFileInput.value = "";
+  });
   $("formatMetadataBtn").addEventListener("click", () => {
     try {
       els.metadataJson.value = JSON.stringify(JSON.parse(els.metadataJson.value || "{}"), null, 2);
@@ -1099,15 +1506,8 @@ function wireEvents() {
   els.clientCertFile.addEventListener("change", () => uploadCert(els.clientCertFile, "client_cert_path", els.clientCertPath));
   els.clientKeyFile.addEventListener("change", () => uploadCert(els.clientKeyFile, "client_key_path", els.clientKeyPath));
   wireProfileDraftEvents();
-  els.messageInput.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
-      return;
-    }
-    event.preventDefault();
-    if (!state.busy) {
-      sendMessage(false);
-    }
-  });
+  wireChatPartEvents();
+  resetComposer();
 }
 
 function wireProfileDraftEvents() {

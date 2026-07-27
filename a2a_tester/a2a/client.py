@@ -39,6 +39,19 @@ class HttpExchange:
     request_headers: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class FileDownload:
+    content: bytes
+    media_type: str
+    filename: str
+    response_headers: dict[str, str]
+    status_code: int | None
+    latency_ms: float | None
+    error: str = ""
+    request_url: str = ""
+    request_headers: dict[str, str] = field(default_factory=dict)
+
+
 def _uses_tls(endpoint: str) -> bool:
     return urlparse(endpoint).scheme.lower() == "https"
 
@@ -107,6 +120,16 @@ def _timeout(config: A2ARequestConfig) -> httpx.Timeout:
         write=min(10.0, request_timeout),
         pool=min(5.0, request_timeout),
     )
+
+
+def _download_headers(config: A2ARequestConfig) -> dict[str, str]:
+    headers = dict(config.headers)
+    header_names = {name.lower() for name in headers}
+    if "a2a-version" not in header_names:
+        headers["A2A-Version"] = normalize_protocol_version(config.protocol_version)
+    if "accept" not in header_names:
+        headers["Accept"] = "*/*"
+    return headers
 
 
 def _network_error(exc: Exception, config: A2ARequestConfig) -> str:
@@ -208,6 +231,73 @@ def stream_json_rpc(config: A2ARequestConfig, request_json: dict[str, Any]) -> I
                     }
     except Exception as exc:
         raise RuntimeError(_network_error(exc, config)) from exc
+
+
+def fetch_file(config: A2ARequestConfig, *, url: str, max_bytes: int) -> FileDownload:
+    started = time.perf_counter()
+    request_headers = _download_headers(config)
+    try:
+        with httpx.Client(
+            verify=_verify_value(config),
+            timeout=_timeout(config),
+            trust_env=False,
+            follow_redirects=True,
+        ) as client:
+            with client.stream("GET", url, headers=request_headers) as response:
+                elapsed = (time.perf_counter() - started) * 1000
+                response_headers = dict(response.headers)
+                if not response.is_success:
+                    return FileDownload(
+                        content=b"",
+                        media_type="application/octet-stream",
+                        filename="file",
+                        response_headers=response_headers,
+                        status_code=response.status_code,
+                        latency_ms=elapsed,
+                        error=f"HTTP {response.status_code} while reading file",
+                        request_url=url,
+                        request_headers=request_headers,
+                    )
+
+                chunks: list[bytes] = []
+                size = 0
+                for chunk in response.iter_bytes():
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise ValueError(f"File is larger than {max_bytes} bytes")
+                    chunks.append(chunk)
+
+                return FileDownload(
+                    content=b"".join(chunks),
+                    media_type=str(response.headers.get("content-type") or "application/octet-stream").split(";", 1)[0],
+                    filename=_filename_from_content_disposition(response.headers.get("content-disposition", "")),
+                    response_headers=response_headers,
+                    status_code=response.status_code,
+                    latency_ms=elapsed,
+                    request_url=url,
+                    request_headers=request_headers,
+                )
+    except Exception as exc:
+        elapsed = (time.perf_counter() - started) * 1000
+        return FileDownload(
+            content=b"",
+            media_type="application/octet-stream",
+            filename="file",
+            response_headers={},
+            status_code=None,
+            latency_ms=elapsed,
+            error=_network_error(exc, config),
+            request_url=url,
+            request_headers=request_headers,
+        )
+
+
+def _filename_from_content_disposition(value: str) -> str:
+    for part in value.split(";"):
+        candidate = part.strip()
+        if candidate.lower().startswith("filename="):
+            return candidate.split("=", 1)[1].strip().strip('"') or "file"
+    return "file"
 
 
 def derive_agent_card_url(endpoint: str) -> str:

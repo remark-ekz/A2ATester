@@ -1582,6 +1582,226 @@ body[data-theme="harbor"] .bubble.user .bubble-label {
   width: 100%;
 }
 
+.message-parts {
+  display: grid;
+  gap: 9px;
+}
+
+.data-part,
+.file-part {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel-alt) 74%, transparent);
+  overflow: hidden;
+}
+
+.data-part summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 11px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.data-part summary small,
+.file-part-head span,
+.composer-file-summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.data-part-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 11px 11px;
+}
+
+.data-part-body button {
+  justify-self: start;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.data-part-body pre,
+.part-unknown {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--input-strong) 80%, transparent);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.file-part {
+  display: grid;
+  gap: 9px;
+  padding: 11px;
+}
+
+.file-part-head,
+.file-part-actions,
+.composer-part-head,
+.composer-file-summary,
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-part-head,
+.composer-file-summary {
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.file-part-head strong,
+.composer-file-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-part-actions {
+  flex-wrap: wrap;
+}
+
+.file-part-actions button,
+.file-part-actions a {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.file-preview {
+  display: block;
+  max-width: min(100%, 460px);
+  max-height: 280px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-strong);
+  object-fit: contain;
+}
+
+.composer-editor {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.composer-parts {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.composer-part {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--input) 72%, transparent);
+}
+
+.composer-part-head {
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.composer-part-controls {
+  display: flex;
+  gap: 5px;
+}
+
+.composer-part-controls .icon-button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 14px;
+}
+
+.composer-part textarea {
+  min-height: 72px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-strong);
+  box-shadow: var(--surface-highlight);
+}
+
+.composer-part textarea:focus {
+  border-color: var(--accent);
+  background: var(--input-strong);
+  box-shadow: var(--surface-highlight), 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.composer-data-part textarea {
+  min-height: 112px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.composer-file-summary {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-strong);
+}
+
+.composer-part-error {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composer-toolbar {
+  flex-wrap: wrap;
+  padding: 1px 2px;
+}
+
+.composer-toolbar .icon-button {
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 7px;
+}
+
+.composer-file-button {
+  padding: 6px 9px;
+  font-size: 12px;
+}
+
+.composer-file-input {
+  display: none;
+}
+
+.composer-limit {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .diagnostics-details .json-panel,
 .json-panel {
   border-radius: 8px;
