@@ -1802,6 +1802,103 @@ body[data-theme="harbor"] .bubble.user .bubble-label {
   font-size: 12px;
 }
 
+.chat-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 328px;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.chat-workspace .chat-pane {
+  height: min(60vh, 680px);
+}
+
+.pinned-data-panel {
+  min-height: 420px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 11px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--surface-highlight), var(--shadow-soft);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+}
+
+.pinned-data-head,
+.pinned-data-actions,
+.pinned-data-switch {
+  display: flex;
+  align-items: center;
+}
+
+.pinned-data-head {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pinned-data-kicker {
+  margin: 0 0 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.pinned-data-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.pinned-data-switch {
+  flex: 0 0 auto;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.pinned-data-switch input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+.pinned-data-input {
+  min-height: 0;
+  height: 100%;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pinned-data-hint {
+  min-height: 18px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pinned-data-actions {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pinned-data-actions .icon-button {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+}
+
+.pinned-data-actions .primary {
+  flex: 1;
+}
+
 .diagnostics-details .json-panel,
 .json-panel {
   border-radius: 8px;
@@ -1842,6 +1939,14 @@ body[data-theme="harbor"] .bubble.user .bubble-label {
   .chat-pane {
     height: 58vh;
     min-height: 360px;
+  }
+
+  .chat-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .pinned-data-panel {
+    min-height: 260px;
   }
 }
 

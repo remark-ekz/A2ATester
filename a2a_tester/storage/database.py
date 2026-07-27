@@ -68,6 +68,8 @@ class Conversation:
     profile_id: int
     title: str
     context_id: str
+    pinned_data_json: str
+    pinned_data_enabled: bool
     created_at: str
     updated_at: str
 
@@ -78,6 +80,8 @@ class Conversation:
             profile_id=row["profile_id"],
             title=row["title"],
             context_id=row["context_id"] or "",
+            pinned_data_json=row["pinned_data_json"] or "{}",
+            pinned_data_enabled=bool(row["pinned_data_enabled"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -126,6 +130,9 @@ class Database:
             version = 2
         if version < 3:
             self._migrate_v3()
+            version = 3
+        if version < 4:
+            self._migrate_v4()
 
     def _migrate_v1(self) -> None:
         with self.transaction() as conn:
@@ -160,6 +167,8 @@ class Database:
                     title TEXT NOT NULL,
                     context_id TEXT NOT NULL DEFAULT '',
                     archived INTEGER NOT NULL DEFAULT 0,
+                    pinned_data_json TEXT NOT NULL DEFAULT '{}',
+                    pinned_data_enabled INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -229,6 +238,15 @@ class Database:
             if "tenant" not in columns:
                 conn.execute("ALTER TABLE profiles ADD COLUMN tenant TEXT NOT NULL DEFAULT ''")
             conn.execute("PRAGMA user_version = 3")
+
+    def _migrate_v4(self) -> None:
+        with self.transaction() as conn:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+            if "pinned_data_json" not in columns:
+                conn.execute("ALTER TABLE conversations ADD COLUMN pinned_data_json TEXT NOT NULL DEFAULT '{}'")
+            if "pinned_data_enabled" not in columns:
+                conn.execute("ALTER TABLE conversations ADD COLUMN pinned_data_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.execute("PRAGMA user_version = 4")
 
     def ensure_default_profile(self) -> None:
         existing = self.db.execute("SELECT id FROM profiles LIMIT 1").fetchone()
@@ -411,6 +429,17 @@ class Database:
                 WHERE id = ?
                 """,
                 (context_id, now_iso(), conversation_id),
+            )
+
+    def update_conversation_pinned_data(self, conversation_id: int, data_json: str, enabled: bool) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE conversations
+                SET pinned_data_json = ?, pinned_data_enabled = ?
+                WHERE id = ?
+                """,
+                (data_json, int(enabled), conversation_id),
             )
 
     def touch_conversation(self, conversation_id: int) -> None:

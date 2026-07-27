@@ -15,6 +15,8 @@ const state = {
   currentAbortController: null,
   composerParts: [],
   nextComposerPartId: 1,
+  pinnedDataDraftConversationId: null,
+  pinnedDataDirty: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -66,6 +68,9 @@ const els = {
   headerRows: $("headerRows"),
   conversationMeta: $("conversationMeta"),
   chatPane: $("chatPane"),
+  pinnedDataJson: $("pinnedDataJson"),
+  pinnedDataEnabled: $("pinnedDataEnabled"),
+  pinnedDataHint: $("pinnedDataHint"),
   composerParts: $("composerParts"),
   messageFileInput: $("messageFileInput"),
   diagnostics: $("diagnostics"),
@@ -134,7 +139,7 @@ function setBusy(busy, label = "Ждем ответ") {
   for (const button of document.querySelectorAll(".chat-delete, .header-save, .header-delete")) {
     button.disabled = busy;
   }
-  for (const element of document.querySelectorAll(".composer-toolbar button, .composer-part-controls button, .composer-part textarea")) {
+  for (const element of document.querySelectorAll(".composer-toolbar button, .composer-part-controls button, .composer-part textarea, .pinned-data-panel button, .pinned-data-panel textarea, .pinned-data-panel input")) {
     element.disabled = busy;
   }
   if (els.messageFileInput) els.messageFileInput.disabled = busy;
@@ -396,6 +401,10 @@ function renderConversation() {
   if (!conversation) {
     els.conversationMeta.innerHTML = "";
     els.chatPane.innerHTML = '<div class="empty-chat">Чат не выбран.</div>';
+    els.pinnedDataJson.value = "{}";
+    els.pinnedDataEnabled.checked = false;
+    els.pinnedDataJson.disabled = true;
+    els.pinnedDataEnabled.disabled = true;
     els.diagnostics.textContent = "[]";
     return;
   }
@@ -416,6 +425,24 @@ function renderConversation() {
     els.chatPane.scrollTop = els.chatPane.scrollHeight;
   }
   els.diagnostics.textContent = JSON.stringify(conversation.diagnostics || [], null, 2);
+  renderPinnedData(conversation);
+}
+
+function renderPinnedData(conversation) {
+  const isNewConversation = state.pinnedDataDraftConversationId !== conversation.id;
+  if (isNewConversation || !state.pinnedDataDirty) {
+    els.pinnedDataJson.value = conversation.pinnedDataJson || "{}";
+    els.pinnedDataEnabled.checked = Boolean(conversation.pinnedDataEnabled);
+    state.pinnedDataDraftConversationId = conversation.id;
+    state.pinnedDataDirty = false;
+  }
+  els.pinnedDataJson.disabled = state.busy;
+  els.pinnedDataEnabled.disabled = state.busy;
+  els.pinnedDataHint.textContent = state.pinnedDataDirty
+    ? "Есть несохранённые изменения."
+    : els.pinnedDataEnabled.checked
+      ? "Будет добавлен отдельной JSON-частью к каждому исходящему сообщению."
+      : "Сохраняется только в этом чате.";
 }
 
 function renderMessage(message, messageIndex) {
@@ -1099,6 +1126,64 @@ function updateComposerPartValue(partId, value) {
   part.error = "";
 }
 
+function parsePinnedDataDraft() {
+  const value = els.pinnedDataJson.value.trim() || "{}";
+  let data;
+  try {
+    data = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`JSON: ${error.message}`);
+  }
+  if (!data || Array.isArray(data) || typeof data !== "object") {
+    throw new Error("JSON должен быть объектом");
+  }
+  return data;
+}
+
+function markPinnedDataDirty() {
+  if (!state.conversation || state.busy) return;
+  state.pinnedDataDirty = true;
+  renderPinnedData(state.conversation);
+}
+
+function formatPinnedData() {
+  try {
+    els.pinnedDataJson.value = JSON.stringify(parsePinnedDataDraft(), null, 2);
+    markPinnedDataDirty();
+    setStatus("Закреплённый JSON отформатирован");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function savePinnedData(showStatus = true) {
+  if (!state.conversation || state.busy) return false;
+  let data;
+  try {
+    data = parsePinnedDataDraft();
+  } catch (error) {
+    setStatus(error.message);
+    return false;
+  }
+  try {
+    const response = await api(`/api/conversations/${state.conversation.id}/pinned-data`, {
+      method: "PUT",
+      body: JSON.stringify({
+        dataJson: JSON.stringify(data),
+        enabled: els.pinnedDataEnabled.checked,
+      }),
+    });
+    state.conversation = response.conversation;
+    state.pinnedDataDirty = false;
+    renderConversation();
+    if (showStatus) setStatus("Закреплённый JSON сохранён");
+    return true;
+  } catch (error) {
+    setStatus(error.message);
+    return false;
+  }
+}
+
 function handleComposerAction(action, partId) {
   const index = state.composerParts.findIndex((part) => part.id === partId);
   if (index < 0) return;
@@ -1168,6 +1253,14 @@ async function outgoingMessageParts() {
       });
     }
   }
+  if (els.pinnedDataEnabled.checked) {
+    try {
+      result.push({ type: "data", data: parsePinnedDataDraft() });
+    } catch (error) {
+      setStatus(error.message);
+      throw new Error("Исправьте закреплённый JSON перед отправкой");
+    }
+  }
   if (hasError) {
     renderComposer();
     throw new Error("Исправьте данные JSON перед отправкой");
@@ -1193,6 +1286,10 @@ function formatFileSize(value) {
 }
 
 async function sendMessage(stream = false) {
+  if (state.pinnedDataDirty && els.pinnedDataEnabled.checked) {
+    const saved = await savePinnedData(false);
+    if (!saved) return;
+  }
   let parts;
   try {
     parts = await outgoingMessageParts();
@@ -1471,6 +1568,10 @@ function wireEvents() {
   $("addTextPartBtn").addEventListener("click", () => addComposerPart("text"));
   $("addDataPartBtn").addEventListener("click", () => addComposerPart("data"));
   $("addFilePartBtn").addEventListener("click", () => els.messageFileInput.click());
+  $("formatPinnedDataBtn").addEventListener("click", formatPinnedData);
+  $("savePinnedDataBtn").addEventListener("click", () => savePinnedData());
+  els.pinnedDataJson.addEventListener("input", markPinnedDataDirty);
+  els.pinnedDataEnabled.addEventListener("change", markPinnedDataDirty);
   els.messageFileInput.addEventListener("change", () => {
     addComposerFiles(els.messageFileInput.files);
     els.messageFileInput.value = "";

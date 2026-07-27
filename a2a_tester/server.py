@@ -272,6 +272,17 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
             db.update_conversation_context(conversation_id, new_context_id())
         return {"conversation": conversation_payload(db, conversation_id)}
 
+    @app.put("/api/conversations/{conversation_id}/pinned-data")
+    async def update_conversation_pinned_data(conversation_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        db.get_conversation(conversation_id)
+        data = parse_pinned_data(payload.get("dataJson", "{}"))
+        db.update_conversation_pinned_data(
+            conversation_id,
+            json.dumps(data, ensure_ascii=False, indent=2),
+            bool(payload.get("enabled", False)),
+        )
+        return {"conversation": conversation_payload(db, conversation_id)}
+
     @app.delete("/api/conversations/{conversation_id}")
     def delete_conversation(conversation_id: int, activeConversationId: int = 0) -> dict[str, Any]:
         try:
@@ -665,6 +676,8 @@ def conversation_payload(db: Database, conversation_id: int) -> dict[str, Any]:
         "profileId": conversation.profile_id,
         "title": conversation.title,
         "contextId": conversation.context_id,
+        "pinnedDataJson": conversation.pinned_data_json,
+        "pinnedDataEnabled": conversation.pinned_data_enabled,
         "taskId": latest_task_id(db, conversation_id),
         "taskState": latest_task_state(db, conversation_id),
         "messages": messages_payload(db, conversation_id),
@@ -986,6 +999,21 @@ def parse_metadata(value: Any) -> dict[str, Any]:
     parsed = json.loads(text)
     if not isinstance(parsed, dict):
         raise HTTPException(status_code=400, detail="Metadata must be a JSON object")
+    return parsed
+
+
+def parse_pinned_data(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Закрепленные данные должны быть объектом JSON") from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="Закрепленные данные должны быть объектом JSON")
     return parsed
 
 

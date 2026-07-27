@@ -198,7 +198,27 @@
         </section>
 
         <section class="conversation-meta" id="conversationMeta"></section>
-        <section class="chat-pane" id="chatPane"></section>
+        <section class="chat-workspace">
+          <section class="chat-pane" id="chatPane"></section>
+          <aside class="pinned-data-panel" aria-label="Закрепленные данные диалога">
+            <div class="pinned-data-head">
+              <div>
+                <p class="pinned-data-kicker">ДАННЫЕ ДИАЛОГА</p>
+                <h3>Закреплённый JSON</h3>
+              </div>
+              <label class="pinned-data-switch" title="Добавлять JSON к каждому исходящему сообщению">
+                <input id="pinnedDataEnabled" type="checkbox" />
+                <span>Включать</span>
+              </label>
+            </div>
+            <textarea id="pinnedDataJson" class="code-input pinned-data-input" spellcheck="false" placeholder="{ }"></textarea>
+            <p id="pinnedDataHint" class="pinned-data-hint">Сохраняется только в этом чате.</p>
+            <div class="pinned-data-actions">
+              <button id="formatPinnedDataBtn" class="icon-button" type="button" title="Форматировать JSON">{ }</button>
+              <button id="savePinnedDataBtn" class="primary" type="button">Сохранить</button>
+            </div>
+          </aside>
+        </section>
 
         <section class="composer">
           <div class="composer-editor">
