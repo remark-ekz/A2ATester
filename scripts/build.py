@@ -13,6 +13,29 @@ from uv_environment import uv_environment
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+def local_python_with_pyinstaller() -> Path | None:
+    candidates = [
+        Path(sys.executable),
+        PROJECT_ROOT / ".venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"),
+    ]
+    checked: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.absolute()
+        if candidate in checked or not candidate.is_file():
+            continue
+        checked.add(candidate)
+        probe = subprocess.run(
+            [str(candidate), "-c", "import PyInstaller"],
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return candidate
+    return None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build A2A Tester with PyInstaller")
     parser.add_argument(
@@ -46,10 +69,15 @@ def main() -> int:
             pyinstaller_command.append("--windowed")
     pyinstaller_command.append(str(PROJECT_ROOT / "a2a_tester" / "main.py"))
 
-    uv = shutil.which("uv")
-    if uv:
-        command = [uv, "run", "--extra", "build", "python", "-m", "PyInstaller", *pyinstaller_command]
+    local_python = local_python_with_pyinstaller()
+    uv = None
+    if local_python:
+        command = [str(local_python), "-m", "PyInstaller", *pyinstaller_command]
     else:
+        uv = shutil.which("uv")
+    if not local_python and uv:
+        command = [uv, "run", "--extra", "build", "python", "-m", "PyInstaller", *pyinstaller_command]
+    elif not local_python:
         command = [sys.executable, "-m", "PyInstaller", *pyinstaller_command]
     return subprocess.call(command, cwd=PROJECT_ROOT, env=env)
 

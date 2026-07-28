@@ -417,7 +417,15 @@ def create_app(db: Database, data_dir: Path) -> FastAPI:
                 return
             yield sse({"type": "state", **refreshed(db, profile_id, conversation_id, status_after_send(db, conversation_id, "Stream завершен"))})
 
-        return StreamingResponse(events(), media_type="text/event-stream")
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.post("/api/tasks/{method_name}")
     async def task_request(method_name: str, request: Request, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1147,6 +1155,7 @@ def palettes() -> list[dict[str, str]]:
         {"key": "studio", "name": "Светлый режим"},
         {"key": "graphite", "name": "Темный режим"},
         {"key": "harbor", "name": "Глубокий графит"},
+        {"key": "mono", "name": "Монохромное стекло"},
     ]
 
 

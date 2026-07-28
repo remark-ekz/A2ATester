@@ -131,22 +131,32 @@ function localizeStatus(text) {
 function setBusy(busy, label = "Ждем ответ") {
   state.busy = busy;
   document.body.dataset.busy = busy ? "true" : "false";
-  for (const id of ["sendBtn", "streamBtn", "saveProfileBtn", "deleteProfileBtn", "agentCardBtn", "getTaskBtn", "cancelTaskBtn", "chatListLimit", "addHeaderBtn"]) {
-    $(id).disabled = busy;
-  }
+  document.body.setAttribute("aria-busy", String(busy));
   els.stopRequest.hidden = !busy;
   els.stopRequest.disabled = !busy;
-  for (const button of document.querySelectorAll(".chat-delete, .header-save, .header-delete")) {
-    button.disabled = busy;
-  }
-  for (const element of document.querySelectorAll(".composer-toolbar button, .composer-part-controls button, .composer-part textarea, .pinned-data-panel button, .pinned-data-panel textarea, .pinned-data-panel input")) {
-    element.disabled = busy;
-  }
-  if (els.messageFileInput) els.messageFileInput.disabled = busy;
+  syncBusyControls();
   if (busy) {
     startBusyTimer(label);
   } else {
     stopBusyTimer();
+  }
+  renderProcessingIndicator();
+}
+
+function syncBusyControls() {
+  for (const control of document.querySelectorAll(".app-shell button, .app-shell input, .app-shell select, .app-shell textarea")) {
+    if (control === els.stopRequest) continue;
+    if (state.busy) {
+      if (!Object.hasOwn(control.dataset, "disabledBeforeBusy")) {
+        control.dataset.disabledBeforeBusy = control.disabled ? "true" : "false";
+      }
+      control.disabled = true;
+      continue;
+    }
+    if (Object.hasOwn(control.dataset, "disabledBeforeBusy")) {
+      control.disabled = control.dataset.disabledBeforeBusy === "true";
+      delete control.dataset.disabledBeforeBusy;
+    }
   }
 }
 
@@ -198,6 +208,8 @@ function updateBusyStatus() {
   if (!state.busyStartedAt) return;
   const elapsed = Math.max(0, (performance.now() - state.busyStartedAt) / 1000);
   setStatus(`${state.busyLabel} · ${elapsed.toFixed(1)}s`);
+  const elapsedElement = els.chatPane?.querySelector(".processing-elapsed");
+  if (elapsedElement) elapsedElement.textContent = `${elapsed.toFixed(1)} с`;
 }
 
 function statusWithLatency(status, conversation = state.conversation) {
@@ -280,6 +292,7 @@ function renderAll() {
   renderHeaderRows();
   renderConversations();
   renderConversation();
+  syncBusyControls();
 }
 
 function renderProfileSelect() {
@@ -367,13 +380,15 @@ function renderConversations() {
   for (const conversation of state.conversations) {
     const item = document.createElement("div");
     item.className = `chat-item ${conversation.id === state.selectedConversationId ? "active" : ""}`;
+    const contextId = String(conversation.contextId || "не задан");
 
     const selectButton = document.createElement("button");
     selectButton.className = "chat-select";
+    selectButton.title = `context_id: ${contextId}`;
     selectButton.innerHTML = `
       <strong>${escapeHtml(conversation.title)}</strong>
       <span class="chat-preview">${escapeHtml(conversation.preview || "Сообщений пока нет")}</span>
-      <span class="chat-context">${escapeHtml(shortId(conversation.contextId))}</span>
+      <span class="chat-context" title="context_id: ${escapeAttribute(contextId)}">context_id: ${escapeHtml(shortId(contextId))}</span>
     `;
     selectButton.addEventListener("click", () => selectConversation(conversation.id));
 
@@ -382,7 +397,6 @@ function renderConversations() {
     deleteButton.type = "button";
     deleteButton.title = "Удалить чат";
     deleteButton.textContent = "Удалить";
-    deleteButton.disabled = state.busy;
     deleteButton.addEventListener("click", () => deleteConversation(conversation.id));
 
     item.append(selectButton, deleteButton);
@@ -406,6 +420,8 @@ function renderConversation() {
     els.pinnedDataJson.disabled = true;
     els.pinnedDataEnabled.disabled = true;
     els.diagnostics.textContent = "[]";
+    renderProcessingIndicator();
+    syncBusyControls();
     return;
   }
 
@@ -426,6 +442,29 @@ function renderConversation() {
   }
   els.diagnostics.textContent = JSON.stringify(conversation.diagnostics || [], null, 2);
   renderPinnedData(conversation);
+  renderProcessingIndicator();
+  syncBusyControls();
+}
+
+function renderProcessingIndicator() {
+  if (!els.chatPane) return;
+  els.chatPane.querySelector(".processing-indicator")?.remove();
+  if (!state.busy) return;
+
+  const elapsed = state.busyStartedAt
+    ? Math.max(0, (performance.now() - state.busyStartedAt) / 1000).toFixed(1)
+    : "0.0";
+  const indicator = document.createElement("div");
+  indicator.className = "processing-indicator";
+  indicator.setAttribute("role", "status");
+  indicator.setAttribute("aria-live", "polite");
+  indicator.innerHTML = `
+    <span class="processing-spinner" aria-hidden="true"></span>
+    <span class="processing-label">${escapeHtml(state.busyLabel || "Обрабатываем запрос")}</span>
+    <span class="processing-elapsed">${elapsed} с</span>
+  `;
+  els.chatPane.appendChild(indicator);
+  els.chatPane.scrollTop = els.chatPane.scrollHeight;
 }
 
 function renderPinnedData(conversation) {
@@ -436,8 +475,6 @@ function renderPinnedData(conversation) {
     state.pinnedDataDraftConversationId = conversation.id;
     state.pinnedDataDirty = false;
   }
-  els.pinnedDataJson.disabled = state.busy;
-  els.pinnedDataEnabled.disabled = state.busy;
   els.pinnedDataHint.textContent = state.pinnedDataDirty
     ? "Есть несохранённые изменения."
     : els.pinnedDataEnabled.checked
@@ -452,7 +489,10 @@ function renderMessage(message, messageIndex) {
   return `
     <div class="message-row ${side}">
       <div class="bubble ${kind}">
-        <div class="bubble-label">${escapeHtml(label)}</div>
+        <div class="bubble-header">
+          <div class="bubble-label">${escapeHtml(label)}</div>
+          <button class="message-copy" type="button" data-message-index="${messageIndex}" title="Копировать сообщение" aria-label="Копировать сообщение"></button>
+        </div>
         <div class="message-parts">${renderMessageParts(message, messageIndex)}</div>
       </div>
     </div>
@@ -1297,7 +1337,7 @@ async function sendMessage(stream = false) {
     setStatus(error.message);
     return;
   }
-  const controller = beginCancelableRequest(stream ? "Ждем stream-ответ" : "Ждем ответ");
+  const controller = beginCancelableRequest(stream ? "Обрабатываем поток" : "Обрабатываем запрос");
   try {
     await saveProfile(false);
     if (stream) {
@@ -1339,19 +1379,32 @@ async function streamRequest(parts, signal) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+
+  const consumeSseBuffer = (flush = false) => {
+    const normalized = buffer.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+    const chunks = normalized.split("\n\n");
+    if (!flush) buffer = chunks.pop() || "";
+    else buffer = "";
+
+    for (const chunk of chunks) {
+      const dataLines = chunk
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).replace(/^ /, ""));
+      if (!dataLines.length) continue;
+      const data = JSON.parse(dataLines.join("\n"));
+      applyConversationUpdate(data);
+    }
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split("\n\n");
-    buffer = chunks.pop() || "";
-    for (const chunk of chunks) {
-      const line = chunk.split("\n").find((item) => item.startsWith("data: "));
-      if (!line) continue;
-      const data = JSON.parse(line.slice(6));
-      applyConversationUpdate(data);
-    }
+    consumeSseBuffer();
   }
+  buffer += decoder.decode();
+  consumeSseBuffer(true);
 }
 
 function applyConversationUpdate(data) {
@@ -1459,22 +1512,53 @@ function conversationPart(messageIndex, partIndex) {
   return Array.isArray(parts) ? parts[partIndex] : null;
 }
 
-async function copyJsonPart(messageIndex, partIndex) {
-  const part = conversationPart(messageIndex, partIndex);
-  if (!part || !Object.hasOwn(part, "data")) return;
-  const text = JSON.stringify(part.data, null, 2);
+function messageCopyText(messageIndex) {
+  const message = state.conversation?.messages?.[messageIndex];
+  if (!message) return "";
+  const parts = Array.isArray(message.raw?.parts) ? message.raw.parts : [];
+  if (!parts.length) return String(message.text || "");
+
+  const text = parts.map((part) => {
+    if (!part || typeof part !== "object") return JSON.stringify(part, null, 2);
+    if (Object.hasOwn(part, "text")) return String(part.text || "");
+    if (Object.hasOwn(part, "data")) return JSON.stringify(part.data, null, 2);
+    const file = fileDescriptor(part);
+    if (file) return `[Файл: ${file.filename}]`;
+    return JSON.stringify(part, null, 2);
+  }).filter(Boolean).join("\n\n");
+
+  return text || String(message.text || "");
+}
+
+async function copyToClipboard(text, successStatus) {
+  if (!text) {
+    setStatus("В сообщении нет данных для копирования");
+    return;
+  }
   try {
     await navigator.clipboard.writeText(text);
-    setStatus("JSON скопирован");
   } catch {
     const textarea = document.createElement("textarea");
     textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
     document.body.append(textarea);
     textarea.select();
     document.execCommand("copy");
     textarea.remove();
-    setStatus("JSON скопирован");
   }
+  setStatus(successStatus);
+}
+
+async function copyMessage(messageIndex) {
+  await copyToClipboard(messageCopyText(messageIndex), "Сообщение скопировано");
+}
+
+async function copyJsonPart(messageIndex, partIndex) {
+  const part = conversationPart(messageIndex, partIndex);
+  if (!part || !Object.hasOwn(part, "data")) return;
+  await copyToClipboard(JSON.stringify(part.data, null, 2), "JSON скопирован");
 }
 
 function downloadInlinePart(messageIndex, partIndex) {
@@ -1543,10 +1627,11 @@ async function downloadRemotePart(messageIndex, partIndex) {
 
 function wireChatPartEvents() {
   els.chatPane.addEventListener("click", (event) => {
-    const action = event.target.closest(".part-copy, .part-download, .part-fetch");
+    const action = event.target.closest(".message-copy, .part-copy, .part-download, .part-fetch");
     if (!action) return;
     const messageIndex = Number(action.dataset.messageIndex);
     const partIndex = Number(action.dataset.partIndex);
+    if (action.classList.contains("message-copy")) copyMessage(messageIndex);
     if (action.classList.contains("part-copy")) copyJsonPart(messageIndex, partIndex);
     if (action.classList.contains("part-download")) downloadInlinePart(messageIndex, partIndex);
     if (action.classList.contains("part-fetch")) downloadRemotePart(messageIndex, partIndex);
